@@ -5,3 +5,10 @@ yt-dlp>=2024.0.0
 requests>=2.31.0
 beautifulsoup4>=4.12.0
 lxml>=5.0.0
+
+# Phase 2: RAG Ingestion & Vector Storage
+chromadb>=0.4.22
+sentence-transformers>=2.2.2
+tqdm>=4.66.0
+python-dotenv>=1.0.0
+
