@@ -102,6 +102,12 @@ def parse_metadata_headers(content: str) -> tuple[dict, str]:
             metadata["date"] = line.replace("# Date:", "").strip()
         elif line.startswith("# Domain:"):
             metadata["domain"] = line.replace("# Domain:", "").strip()
+        elif line.startswith("# Is Ng Authored:"):
+            metadata["is_ng_authored"] = line.replace("# Is Ng Authored:", "").strip().lower() == "true"
+        elif line.startswith("# Has Editorial:"):
+            metadata["has_editorial"] = line.replace("# Has Editorial:", "").strip().lower() == "true"
+        elif line.startswith("# Transcript Type:"):
+            metadata["transcript_type"] = line.replace("# Transcript Type:", "").strip()
         elif line.startswith("=" * 10) or line.startswith("-" * 10):
             body_start_idx = idx + 1
             break
@@ -112,6 +118,26 @@ def parse_metadata_headers(content: str) -> tuple[dict, str]:
             
     body_text = "\n".join(lines[body_start_idx:])
     return metadata, body_text.strip()
+
+
+def infer_source_authority(doc_type: str, metadata: dict, filename: str) -> float:
+    """Assigns a lightweight quality prior to help retrieval prefer Andrew's direct voice."""
+    score = 0.5
+
+    if doc_type == "pdfs":
+        score = 1.0
+    elif doc_type == "transcripts":
+        score = 0.95
+    elif doc_type == "the_batch":
+        score = 0.8 if metadata.get("has_editorial") else 0.6
+    elif doc_type == "blog_posts":
+        score = 0.75 if metadata.get("is_ng_authored", True) else 0.35
+
+    lowered = filename.lower()
+    if any(marker in lowered for marker in ["ambassador-spotlight", "heroes-of-deep-learning", "hodl", "working-ai"]):
+        score -= 0.2
+
+    return max(0.1, min(score, 1.0))
 
 # ================================================================================
 # Custom Hybrid Length-Semantic Chunker
@@ -381,7 +407,11 @@ def run_ingestion():
                 "domain": domain,
                 "canonical_example": is_canonical,
                 "date": doc_metadata.get("date", "unknown"),
-                "url": doc_metadata.get("url", "unknown")
+                "url": doc_metadata.get("url", "unknown"),
+                "source_authority": infer_source_authority(doc_type, doc_metadata, basename),
+                "is_ng_authored": bool(doc_metadata.get("is_ng_authored", True)),
+                "has_editorial": bool(doc_metadata.get("has_editorial", False)),
+                "transcript_type": doc_metadata.get("transcript_type", "unknown"),
             }
             
             documents.append(chunk_clean)

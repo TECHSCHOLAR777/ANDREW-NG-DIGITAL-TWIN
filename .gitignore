@@ -8,6 +8,9 @@ data/raw/
 data/cleaned/
 data/metadata/
 data/chroma_db/
+data/memory/
+data/sessions/
+
 
 # Python
 __pycache__/
@@ -24,3 +27,6 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+
+env
