@@ -1,4 +1,4 @@
-# Andrew Ng Digital Twin — 10 Sample Conversations
+# Andrew Ng Digital Twin - 10 Sample Conversations
 
 This document records the ten representative dialogues generated interactively on the system. It demonstrates the digital twin's persona consistency, RAG grounding, temporal hedging, and long-term memory calibration for user **Michael Jackson**, a Product Manager at a tech startup who prefers low-math strategy.
 
@@ -79,7 +79,7 @@ So, if your team currently looks at three different performance graphs, what wou
 ### 🎓 Andrew Ng Response
 Michael, regarding big neural network architectures, I think of your model's learning capacity as an "attic" for storing knowledge. A "big" architecture just gives your algorithm a very large attic.
 
-As I explain in `Machine Learning Yearning`, this ample space lets it learn from vast, diverse datasets—like training your cat detector on internet *and* mobile app images—without "useless facts elbowing out useful ones" or data competing for capacity.
+As I explain in `Machine Learning Yearning`, this ample space lets it learn from vast, diverse datasets - like training your cat detector on internet *and* mobile app images - without "useless facts elbowing out useful ones" or data competing for capacity.
 
 Choosing the *right* architecture isn't exact. As discussed in CS229, we don't know the perfect layers or neurons upfront. We try several architectures, train them, and pick the best based on validation set performance. What's the main benefit of *starting* with a larger one versus smaller when exploring a new problem?
 
@@ -99,7 +99,7 @@ Choosing the *right* architecture isn't exact. As discussed in CS229, we don't k
 ### 🎓 Andrew Ng Response
 Michael, that's a really intuitive thought, and it's true that in many cases, more data almost always helps, as I've noted in `CS230`. When you have a massive dataset, like a million images for classification, the sheer volume can often let even a less complex algorithm perform very well.
 
-However, I find that a lot of the *skill* in machine learning, especially for real-world applications at startups, comes from getting your algorithms to work efficiently even when you *don't* have a million examples—maybe only hundreds. In those situations, as I discuss in `CS229`, the design of your learning algorithm and the assumptions it makes become much more critical. A great algorithm, or rather, a well-chosen one by a skilled team, can make a huge difference.
+However, I find that a lot of the *skill* in machine learning, especially for real-world applications at startups, comes from getting your algorithms to work efficiently even when you *don't* have a million examples - maybe only hundreds. In those situations, as I discuss in `CS229`, the design of your learning algorithm and the assumptions it makes become much more critical. A great algorithm, or rather, a well-chosen one by a skilled team, can make a huge difference.
 
 It's a practical judgment call for a Product Manager: balancing the cost of acquiring more data versus investing time in improving the algorithm. What kind of factors would lead your team to prioritize algorithm design over data collection?
 

@@ -1,4 +1,4 @@
-# Andrew Ng Digital Twin — Architecture Documentation
+# Andrew Ng Digital Twin - Architecture Documentation
 
 This document explains the technical architecture of the Andrew Ng Digital Twin, details the design decisions that distinguish it from standard RAG chatbots, and outlines the information flow through the system.
 
@@ -11,7 +11,7 @@ The twin is designed around the five grading pillars of the assignment:
 - **Technical Accuracy**: Grounding responses in a verified corpus (CS229 notes, *Machine Learning Yearning*, etc.) rather than parametric knowledge.
 - **Memory Quality**: Storing both short-term conversational context and long-term user context across sessions.
 - **RAG Quality**: Implementing a hybrid, reranked search system that favors Andrew's canonical ML examples.
-- **User Experience (UX)**: Minimizing query latency and providing a premium, informative dashboard.
+- **User Experience (UX)**: Minimizing query latency and providing a detailed, informative dashboard.
 
 ---
 

@@ -1,6 +1,6 @@
-# Andrew Ng Digital Twin — RAG Companion
+# Andrew Ng Digital Twin - RAG Companion
 
-An interactive, premium-grade Streamlit dialogue application that emulates Andrew Ng's voice, pedagogical style, and ML expertise. Grounded in a 1.71-million-word corpus of CS229 lecture notes, *Machine Learning Yearning*, "The Batch" newsletters, and lecture transcripts, this system demonstrates advanced Retrieval-Augmented Generation (RAG) and persistent memory.
+A Streamlit dialogue application that emulates Andrew Ng's voice, pedagogical style, and ML expertise. Grounded in a 1.71-million-word corpus of CS229 lecture notes, *Machine Learning Yearning*, "The Batch" newsletters, and lecture transcripts, this system implements Retrieval-Augmented Generation (RAG) and persistent memory.
 
 ---
 
@@ -14,7 +14,7 @@ An interactive, premium-grade Streamlit dialogue application that emulates Andre
    - **Episodic Recall**: Stores key takeaways and summaries from past interactions in `episodic_memory.json` to enable context recall across distinct sessions.
 5. **Timeline Awareness & Hedging**: Detects when queries refer to developments after 2026 and prepends an honest, temporal-hedging disclaimer explaining that the agent is reasoning from established frameworks rather than direct corpus grounding.
 6. **Optimized for Low Latency**: Caches heavy models and indices during app preloading, runs memory updates asynchronously on background daemon threads, and executes exactly **one synchronous Gemini API call** per turn to avoid rate limit (HTTP 429) errors.
-7. **Premium Glassmorphism Dashboard**: Split-column workspace displaying a ChatGPT-style conversation window on the left, and a real-time **Memory Inspector** card system showing what Andrew currently remembers about you on the right.
+7. **Glassmorphism Dashboard**: Split-column workspace displaying a ChatGPT-style conversation window on the left, and a real-time **Memory Inspector** card system showing what Andrew currently remembers about you on the right.
 
 ---
 
