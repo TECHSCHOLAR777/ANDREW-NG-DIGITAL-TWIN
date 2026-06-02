@@ -22,7 +22,7 @@ The following diagram illustrates the flow of information during both **Ingestio
 ```mermaid
 flowchart TD
     %% Ingestion Pipeline
-    subgraph Ingestion Pipeline (Offline)
+    subgraph "Ingestion Pipeline (Offline)"
         A[Raw Corpus: CS229 · MLY · Transcripts · The Batch] --> B[Text Cleaning & Formatting]
         B --> C[Concept-Unit Chunker]
         C --> D[Metadata Enrichment\nDomain · Date · Canonical Flag]
@@ -32,7 +32,7 @@ flowchart TD
     end
 
     %% Runtime Pipeline
-    subgraph Runtime Pipeline (Online)
+    subgraph "Runtime Pipeline (Online)"
         H[User Query] --> I[Dual-Path Retrieval]
         F -->|Vector Query| I
         G -->|Keyword Query| I
