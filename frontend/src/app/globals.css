@@ -1,0 +1,136 @@
+@import "tailwindcss";
+
+:root {
+  --background: #F7F8FA; /* Clean cool gray backdrop */
+  --foreground: #111827; /* Charcoal black */
+}
+
+body {
+  background-color: #F7F8FA;
+  color: #111827;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+  overflow: hidden;
+}
+
+/* Surface Panel Elevations */
+.glass-panel {
+  background-color: #FFFFFF;
+  border: 1px solid #E5E7EB;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
+}
+
+.glass-card {
+  background-color: #FFFFFF;
+  border: 1px solid #E5E7EB;
+}
+
+.glass-node-primary {
+  box-shadow: 0 4px 12px rgba(26, 86, 219, 0.08), 0 0 2px rgba(26, 86, 219, 0.05);
+}
+
+.glass-node-secondary {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+/* Standardized Scrollbars */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: #F3F4F6;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #D1D5DB;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #9CA3AF;
+}
+
+.chat-scrollbar {
+  overflow-y: auto;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { opacity: 0.85; }
+  50% { opacity: 1; transform: scale(1.002); }
+}
+
+.loading-glow {
+  animation: pulse-glow 2s infinite ease-in-out;
+}
+
+/* ──────────────────────────────────────────────────
+   structured waveform visualization keyframes
+   ────────────────────────────────────────────────── */
+.waveform-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 48px;
+}
+
+.waveform-bar {
+  width: 4px;
+  background-color: #1A56DB; /* Royal Blue */
+  border-radius: 9999px;
+  height: 4px;
+  transition: height 0.2s ease;
+}
+
+/* CSS wave animations for the listening state */
+.waveform-listening .waveform-bar {
+  animation: bounce-waveform 1s ease-in-out infinite;
+}
+
+@keyframes bounce-waveform {
+  0%, 100% { height: 4px; }
+  50% { height: 32px; }
+}
+
+/* Stagger bar delays for natural wave motion */
+.bar-1 { animation-delay: 0.1s; opacity: 0.6; }
+.bar-2 { animation-delay: 0.22s; opacity: 0.8; }
+.bar-3 { animation-delay: 0.35s; opacity: 0.9; }
+.bar-4 { animation-delay: 0.15s; opacity: 1.0; }
+.bar-5 { animation-delay: 0.3s; opacity: 1.0; }
+.bar-6 { animation-delay: 0.45s; opacity: 0.9; }
+.bar-7 { animation-delay: 0.25s; opacity: 0.8; }
+.bar-8 { animation-delay: 0.38s; opacity: 0.7; }
+.bar-9 { animation-delay: 0.12s; opacity: 0.5; }
+
+/* Thinking pulse animation state */
+.waveform-thinking .waveform-bar {
+  animation: pulse-waveform 0.8s ease-in-out infinite;
+}
+
+@keyframes pulse-waveform {
+  0%, 100% { height: 8px; }
+  50% { height: 16px; }
+}
+
+/* Speaking waves */
+.waveform-speaking .waveform-bar {
+  animation: bounce-waveform 0.6s ease-in-out infinite;
+}
+.waveform-speaking .bar-1 { animation-delay: 0.05s; }
+.waveform-speaking .bar-2 { animation-delay: 0.12s; }
+.waveform-speaking .bar-3 { animation-delay: 0.22s; }
+.waveform-speaking .bar-4 { animation-delay: 0.08s; }
+.waveform-speaking .bar-5 { animation-delay: 0.18s; }
+.waveform-speaking .bar-6 { animation-delay: 0.28s; }
+.waveform-speaking .bar-7 { animation-delay: 0.15s; }
+.waveform-speaking .bar-8 { animation-delay: 0.22s; }
+.waveform-speaking .bar-9 { animation-delay: 0.06s; }
+
+

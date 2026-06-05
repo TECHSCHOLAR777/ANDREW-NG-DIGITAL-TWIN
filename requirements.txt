@@ -19,4 +19,11 @@ streamlit>=1.30.0
 google-generativeai>=0.3.0
 watchdog>=3.0.0
 
+# Production API & DB Layer
+fastapi>=0.110.0
+uvicorn>=0.28.0
+asyncpg>=0.29.0
+tenacity>=8.2.3
+pydantic>=2.6.0
+
 

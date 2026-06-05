@@ -1,7 +1,16 @@
 # Strategy & Assignment docs (private)
 andrew_ng_digital_twin_strategy.md
 andrew_ng_persona_style_guide.md
-Digital_Twin_Assignment .md
+Digital_Twin_Assignment*.md
+conversations.md
+persona_contract.md
+architecture.md
+
+# Agent / Tooling files
+CLAUDE.md
+AGENTS.md
+**/CLAUDE.md
+**/AGENTS.md
 
 # Data (too large for git, download via scripts)
 data/raw/
@@ -11,22 +20,35 @@ data/chroma_db/
 data/memory/
 data/sessions/
 
-
 # Python
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
 .env
+.env.*
 venv/
 .venv/
+
+# Node / Frontend Build
+node_modules/
+**/node_modules/
+.next/
+**/.next/
+out/
+build/
+tsconfig.tsbuildinfo
 
 # IDE
 .vscode/
 .idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
 
 # OS
 .DS_Store
 Thumbs.db
-
-
 env
