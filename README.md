@@ -1,115 +1,124 @@
-# Andrew Ng Digital Twin - RAG Companion
+# Andrew Ng Digital Twin
 
-A Streamlit dialogue application that emulates Andrew Ng's voice, pedagogical style, and ML expertise. Grounded in a 1.71-million-word corpus of CS229 lecture notes, *Machine Learning Yearning*, "The Batch" newsletters, and lecture transcripts, this system implements Retrieval-Augmented Generation (RAG) and persistent memory.
+This is a web application that acts as an interactive digital twin of Andrew Ng. It teaches machine learning concepts using CS229 lecture notes, DeepLearning.ai materials, and transcripts. 
 
----
-
-## 🚀 Key Features
-
-1. **Authentic Persona Emulation**: Implements Andrew's signature verbal habits, pedagogical moves (e.g., example before definition), T-shaped knowledge framework, and optimistic outlook. Speaks in first-person ("I", "we", "my") with a natural, conversational tone.
-2. **Strict Word-Count Constraint**: Enforces a concise **150-word limit** per response (unless details/proofs are explicitly requested) to keep dialogue focused and optimize Gemini API token usage.
-3. **Dual-Path Hybrid Retrieval**: Integrates Chroma DB vector search (`all-MiniLM-L6-v2`) with a BM25 lexical keyword index, merging results via Reciprocal Rank Fusion (RRF) and reranking via Cross-Encoder (`ms-marco-MiniLM-L6-v2`) to capture precise terminology and canonical analogies.
-4. **Two-Tiered Persistent Memory**:
-   - **Student Profile**: Persists student properties (identity, goals, mathematical comfort level, rapport details, focus areas/confusion points) in `user_profile.json`.
-   - **Episodic Recall**: Stores key takeaways and summaries from past interactions in `episodic_memory.json` to enable context recall across distinct sessions.
-5. **Timeline Awareness & Hedging**: Detects when queries refer to developments after 2026 and prepends an honest, temporal-hedging disclaimer explaining that the agent is reasoning from established frameworks rather than direct corpus grounding.
-6. **Optimized for Low Latency**: Caches heavy models and indices during app preloading, runs memory updates asynchronously on background daemon threads, and executes exactly **one synchronous Gemini API call** per turn to avoid rate limit (HTTP 429) errors.
-7. **Glassmorphism Dashboard**: Split-column workspace displaying a ChatGPT-style conversation window on the left, and a real-time **Memory Inspector** card system showing what Andrew currently remembers about you on the right.
+Instead of building a simple RAG chatbot, I wanted a system that builds a dynamic memory graph of the student as we talk. It tracks what you know, what you struggle with, and uses this context to tailor its explanations.
 
 ---
 
-## 📂 Repository Structure
+## What the Project Does
+
+When you chat with the twin:
+1.  **Search:** It searches a database of lecture materials using a custom Postgres function. This combines vector similarity and raw keyword matches.
+2.  **Memory:** It retrieves nodes and relationships from a personal memory graph in the database to see your active learning state.
+3.  **Generate:** It compiles this data into a system prompt for Gemini, forcing the AI to use Andrew's actual pedagogical traits (using physical props, teaching examples before giving formulas, and keeping a concise, optimistic tone).
+4.  **Extract:** In the background, it extracts new facts from the conversation (like "Student struggles with gradient descent") and saves them back to the database graph.
+
+---
+
+## Features
+
+*   **Pedagogical Persona:** Strict prompts enforce Andrew's voice. The AI leads with analogies, keeps responses under 150 words, and matches explanation depth to the student's background.
+*   **Postgres-only RAG:** Replaces Chroma and external keyword tools with a single Supabase PostgreSQL instance. It runs semantic vector search (using pgvector) and full-text searches concurrently.
+*   **Reciprocal Rank Fusion (RRF):** Merges the semantic and keyword search ranks, applying a prior multiplier to prioritize lecture notes over newsletters or raw transcripts.
+*   **Recursive Graph Traversal:** Uses a recursive 2-hop database query to pull active memory nodes and edges, applying graph weight decay as distance increases.
+*   **Background Triplet Extraction:** Spawns non-blocking async tasks in FastAPI to parse dialogue, extract relation triplets, and upsert them using trigram fuzzy matching to avoid duplicate concepts (like resolving "backprop" to "Backpropagation").
+*   **Fast startup:** Preloads the local sentence-transformer embedding model on FastAPI start so the first query does not suffer from cold-start latency.
+
+---
+
+## Directory Structure
 
 ```
-├── data/
-│   ├── chroma_db/       # Chroma vector store sqlite files
-│   ├── cleaned/         # Ingested and cleaned markdown files
-│   ├── memory/          # JSON files for user_profile and episodic_memory
-│   ├── metadata/        # Ingested documents metadata map
-│   ├── raw/             # Raw PDFs and transcripts (source corpus)
-│   └── sessions/        # Chat session histories stored as JSON
+├── backend/
+│   ├── app/
+│   │   ├── main.py              # FastAPI server entrypoint (lifespan hook, DB pool, model preloading)
+│   │   ├── routers/
+│   │   │   └── chat.py          # /message, /graph, and /clear endpoints
+│   │   └── services/
+│   │       ├── prompt_cache.py  # Prompt compiler & context assembly
+│   │       └── triplet_extractor.py # Background SPO triplet extraction
+│   └── migrations/
+│       ├── 001_knowledge_graph_schema.sql  # Entities, relationships, and chunks tables
+│       ├── 002_entity_resolution_and_traversal.sql # 2-hop CTE query & entity resolution function
+│       ├── 003_hybrid_retrieval_rrf.sql     # RRF hybrid search stored procedure
+│       └── 004_production_hardening.sql    # Index optimizations
+├── frontend/
+│   ├── src/
+│   │   ├── app/
+│   │   │   ├── page.tsx         # Chat UI and memory matrix dashboard
+│   │   │   └── layout.tsx
+│   │   └── components/          # Interactive memory matrix graph view
+│   ├── package.json
+│   └── tsconfig.json
 ├── scripts/
-│   ├── app.py           # Streamlit application entrypoint & UI
-│   ├── clean_text.py    # Preprocessing script for data cleaning
-│   ├── ingest_data.py   # RAG ingestion, chunking, and embedding pipeline
-│   ├── persona_engine.py# Core RAG, prompt assembly, and memory runtime
-│   ├── query_rag.py     # Local retrieval diagnostic tool (CLI)
-│   └── collect_*.py     # Scrapers and crawlers for primary sources
-├── README.md            # Setup and design documentation
-├── architecture.md      # Mermaid diagrams and system architecture breakdown
-├── persona_contract.md  # The 10 mandatory rules and anti-patterns
-└── requirements.txt     # Project python dependencies
+│   ├── ingest_supabase.py       # Python script to seed database chunks & embeddings
+│   ├── app.py                   # Legacy Streamlit app
+│   └── collect_*.py             # Source scraper scripts
+├── architecture.md              # Deep dive architectural documentation
+├── requirements.txt             # Python dependencies
+└── Dockerfile                   # Deployment file
 ```
 
 ---
 
-## 🛠️ Installation & Setup
+## Configuration
 
-### 1. Clone the Repository & Install Dependencies
-Ensure you have Python 3.10+ installed. Install the required libraries:
-```bash
-pip install -r requirements.txt
-```
+You need to set up two environment variables in a `.env` file in the root directory:
 
-### 2. Configure API Keys
-Create a `.env` file in the root directory. You can specify a single key or multiple keys to enable automatic round-robin key rotation on rate limits:
 ```env
-# Single Key
+DATABASE_URL=postgresql+asyncpg://postgres:your_password@db.your_supabase_project.supabase.co:5432/postgres
 GEMINI_API_KEY=your_gemini_api_key_here
-
-# Or Multiple Keys for Rate-Limit Rotation
-GEMINI_API_KEY_1=key_one
-GEMINI_API_KEY_2=key_two
 ```
 
-### 3. Populating the Grounding Database (Optional)
-The Chroma database is pre-populated (~138MB database size grounding 530+ files). If you wish to re-ingest or add new files, place raw PDFs/transcripts in `data/raw/` and run:
-```bash
-python scripts/ingest_data.py
-```
+### Database Setup
+Execute the migration scripts in the following order against your PostgreSQL instance to create the tables, indexes, and stored procedures:
+
+1.  `backend/migrations/001_knowledge_graph_schema.sql`
+2.  `backend/migrations/002_entity_resolution_and_traversal.sql`
+3.  `backend/migrations/003_hybrid_retrieval_rrf.sql`
+4.  `backend/migrations/004_production_hardening.sql`
 
 ---
 
-## 🖥️ Running the Application
+## Installation & Setup
 
-Launch the Streamlit interactive dashboard:
-```bash
-streamlit run scripts/app.py
-```
+### 1. Backend Setup
+1.  Install the Python requirements:
+    ```bash
+    pip install -r requirements.txt
+    ```
+2.  Seed the database with the grounding materials:
+    ```bash
+    python scripts/ingest_supabase.py
+    ```
+3.  Start the FastAPI application:
+    ```bash
+    python -m uvicorn backend.app.main:app --reload
+    ```
+    The server will startup, preload the SentenceTransformer model, and run on `http://127.0.0.1:8000`.
 
-On first startup, the app displays a setup screen while it preloads embedding models and builds the BM25 index. Once complete, you are redirected to the chat workspace.
-
----
-
-## 🧠 Memory Schema Description
-
-### 1. Student Profile (`data/memory/user_profile.json`)
-Maintains structured, evolving traits extracted from conversation:
-- `student_profile`: Tracks `identity` (e.g., Undergraduate, Product Manager), `industry_domain`, and `mathematical_comfort_level` (High, Medium, Conceptual).
-- `career_and_business_goals`: Tracks `short_term` and `long_term` professional ambitions.
-- `misconceptions_and_focus_areas`: A list of concepts the student struggled with or needs to review.
-- `learning_preferences`: Tracks `explanation_style` (e.g., heavily analogy-driven).
-- `personal_rapport`: Stores student `name`, `location`, and a list of `notable_remarks`.
-- `topics_discussed_timeline`: Logs keywords of discussed topics over sessions.
-
-### 2. Episodic Memory (`data/memory/episodic_memory.json`)
-Maintains unstructured cross-session summaries:
-```json
-{
-  "memory": "The student is deploying an SQLite-backed RAG database.",
-  "topic": "RAG Database",
-  "memory_type": "project_context",
-  "tags": ["rag", "sqlite", "database"],
-  "importance": 2,
-  "timestamp": "2026-06-02T12:00:00"
-}
-```
+### 2. Frontend Setup
+1.  Navigate to the frontend folder:
+    ```bash
+    cd frontend
+    ```
+2.  Install packages and run the development server:
+    ```bash
+    npm install
+    npm run dev
+    ```
+3.  Open the web interface in your browser at `http://localhost:3000`.
 
 ---
 
-## 🎓 Evaluation & Persona Compliance
+## Usage & Verification
 
-The twin's outputs can be checked against the **three diagnostic tests** from the strategy guide:
-- **The Prop Test**: Explain neural networks. (Pass if it opens with Lego bricks within the first two sentences).
-- **The Canonical Example Test**: Explain linear regression. (Pass if it predictions housing prices as the anchor example).
-- **The Career Voice Test**: Ask how to get started in ML. (Pass if it acknowledges feelings, provides numbered concrete steps, and urges building over pure reading).
+To verify that the digital twin is working correctly, send these queries in the chat:
+
+*   **The Prop Analogy:** Ask, *"Explain Neural Networks."* The response must lead with an analogy using Lego bricks.
+*   **The Anchor Example:** Ask, *"Explain Linear Regression."* The response must use housing price predictions as the anchor example.
+*   **Career Advice:** Ask, *"How can I build a career in AI?"* The agent should give you concrete steps, acknowledge your professional background, and emphasize building projects over just reading textbooks.
+
+### Resetting Memory
+The frontend generates a fresh UUID for the session on every page mount to isolate your database memory. If you want to wipe the current state, click the "Reset learning memory" button. This cascade-deletes all turns, nodes, and edges associated with the current UUID, and issues a fresh session identifier.
