@@ -49,6 +49,7 @@ async def lifespan(app: FastAPI):
                 min_size         = 2,
                 max_size         = 20,
                 command_timeout  = 30,
+                statement_cache_size = 0, # Fix prepared statements cache crash on Supabase pooler
                 # Register a codec so asyncpg sends Python lists as pgvector columns
                 # (pgvector asyncpg integration)
                 init             = _register_vector_codec,
@@ -60,10 +61,6 @@ async def lifespan(app: FastAPI):
             if attempt == max_retries:
                 raise
             await asyncio.sleep(2 ** attempt)  # exponential backoff: 2s, 4s
-    # Preload the sentence-transformers model on startup to prevent first-request timeouts
-    from .routers.chat import preload_local_embed_model
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, preload_local_embed_model)
 
     yield
     await app.state.db_pool.close()

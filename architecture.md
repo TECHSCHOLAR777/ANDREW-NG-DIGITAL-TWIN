@@ -11,7 +11,7 @@ When designing this, I focused on five main requirements:
 *   **Fact grounding:** Every response is grounded in lecture notes and transcripts, not the general knowledge of the model.
 *   **Dynamic memory:** Instead of using static text files or dumping raw chat history into the context, the system maps out relationships (like concepts the student understands or struggles with) in a database graph.
 *   **Hybrid search:** I combined vector search and traditional keyword search inside a single database function using Reciprocal Rank Fusion (RRF).
-*   **No startup lag:** The first query was originally timing out because the embedding model loaded lazily. I fixed this by preloading the model into memory during the FastAPI server startup.
+*   **Offloaded Embeddings:** To prevent exceeding Render's 512MB RAM free tier and crashing the server, I offloaded the embedding generation to Hugging Face's Serverless Inference API (using all-mpnet-base-v2), keeping container RAM usage under 100MB.
 
 ---
 
@@ -25,7 +25,7 @@ flowchart TD
     UserQuery[User Query] -->|Sends Tenant ID & Gemini Key| API[FastAPI Backend]
     
     subgraph Processing [Runtime Pipeline]
-        API --> Embed[Generate Embedding\nLocal all-mpnet-base-v2]
+        API --> Embed[Generate Embedding\nvia Hugging Face API]
         
         %% Retrieval paths
         Embed -->|Vector + Keyword Search| DBChunks[(Postgres: knowledge_chunks)]
