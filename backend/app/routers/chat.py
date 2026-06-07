@@ -50,7 +50,10 @@ _cache_managers: dict[str, PromptCacheManager] = {}
 # DEPENDENCY: DB pool from app state
 # ─────────────────────────────────────────────────────────────────────────────
 async def get_db(request: Request) -> asyncpg.Pool:
-    return request.app.state.db_pool
+    pool = request.app.state.db_pool
+    if pool is None:
+        raise HTTPException(status_code=503, detail="Database connection is unavailable")
+    return pool
 
 
 # ─────────────────────────────────────────────────────────────────────────────
