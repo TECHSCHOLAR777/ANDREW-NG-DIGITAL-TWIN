@@ -27,6 +27,12 @@ const KEY_LOCAL_STORAGE_TENANT = "andrew_ng_tenant_uuid";
 // Self-correcting API Endpoint configuration helper
 const resolveApiUrl = (baseUrl: string) => {
   let url = baseUrl.trim().replace(/\/$/, "");
+  
+  // Force HTTPS for production render domains to prevent Mixed Content blocks
+  if (url.includes("onrender.com") && url.startsWith("http://")) {
+    url = url.replace("http://", "https://");
+  }
+  
   if (!url.includes("/api/v1/chat")) {
     if (url.includes("/api/v1")) {
       url = `${url}/chat`;
@@ -39,7 +45,9 @@ const resolveApiUrl = (baseUrl: string) => {
   return url;
 };
 
-const API_BASE_URL = resolveApiUrl(process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000");
+// Ensure fallback also gracefully defaults if Vercel environment injection lags
+const rawUrl = process.env.NEXT_PUBLIC_API_URL || "https://digital-twin-gzgi.onrender.com";
+const API_BASE_URL = resolveApiUrl(rawUrl);
 
 interface RetrievedChunk {
   source_file: string;
