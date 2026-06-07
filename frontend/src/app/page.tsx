@@ -24,8 +24,22 @@ import type { TripletRow, EdgeRow } from "../types/graph";
 const KEY_LOCAL_STORAGE_GEMINI = "andrew_ng_byok_key";
 const KEY_LOCAL_STORAGE_TENANT = "andrew_ng_tenant_uuid";
 
-// API Endpoint configuration with fallback for local runs
-const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
+// Self-correcting API Endpoint configuration helper
+const resolveApiUrl = (baseUrl: string) => {
+  let url = baseUrl.trim().replace(/\/$/, "");
+  if (!url.includes("/api/v1/chat")) {
+    if (url.includes("/api/v1")) {
+      url = `${url}/chat`;
+    } else if (url.includes("/api")) {
+      url = `${url}/v1/chat`;
+    } else {
+      url = `${url}/api/v1/chat`;
+    }
+  }
+  return url;
+};
+
+const API_BASE_URL = resolveApiUrl(process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000");
 
 interface RetrievedChunk {
   source_file: string;
@@ -303,7 +317,7 @@ export default function ChatPage() {
     if (!activeSession || isSyncingGraph) return;
     setIsSyncingGraph(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/v1/chat/graph/${activeSession.id}`, {
+      const response = await fetch(`${API_BASE_URL}/graph/${activeSession.id}`, {
         headers: {
           "X-Gemini-Api-Key": geminiKey.trim() || "AIzaSy...",
           "X-Tenant-Id": tenantId
@@ -335,7 +349,7 @@ export default function ChatPage() {
       return;
     }
     try {
-      await fetch(`${API_BASE_URL}/api/v1/chat/clear`, {
+      await fetch(`${API_BASE_URL}/clear`, {
         method: "POST",
         headers: {
           "X-Gemini-Api-Key": geminiKey.trim() || "AIzaSy...",
@@ -545,7 +559,7 @@ export default function ChatPage() {
         content: m.content
       }));
 
-      const response = await fetch(`${API_BASE_URL}/api/v1/chat/message`, {
+      const response = await fetch(`${API_BASE_URL}/message`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
