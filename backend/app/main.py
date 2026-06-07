@@ -90,12 +90,8 @@ app = FastAPI(
 # CORS — adjust origins for production
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://digital-twin-kohl-six.vercel.app",
-        "http://localhost:3000",
-        "http://localhost:5173"
-    ],
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
