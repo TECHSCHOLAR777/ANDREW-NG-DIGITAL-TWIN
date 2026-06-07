@@ -25,6 +25,8 @@ import json
 import logging
 import re
 import uuid
+import os
+import httpx
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -128,24 +130,45 @@ OUTPUT FORMAT (strict JSON array):
 """.strip()
 
 
-_local_embed_model = None
+HF_TOKEN = os.getenv("HF_TOKEN")
+HF_MODEL_ID = os.getenv("HF_MODEL_ID", "sentence-transformers/all-mpnet-base-v2")
+HF_API_URL = os.getenv("HF_API_URL", f"https://api-inference.huggingface.co/models/{HF_MODEL_ID}")
 
-def _get_local_embed_model():
-    global _local_embed_model
-    if _local_embed_model is None:
-        from sentence_transformers import SentenceTransformer
-        _local_embed_model = SentenceTransformer("all-mpnet-base-v2")
-    return _local_embed_model
+# Sanitize to ensure the URL has a protocol prefix
+if HF_API_URL and not HF_API_URL.startswith("http"):
+    HF_API_URL = f"https://{HF_API_URL}"
 
 async def _compute_embedding(text: str) -> list[float]:
-    """Compute a 768-dim embedding locally using sentence-transformers."""
-    loop = asyncio.get_event_loop()
-    model = _get_local_embed_model()
-    result = await loop.run_in_executor(
-        None,
-        lambda: model.encode(text).tolist()
-    )
-    return result
+    """Compute a 768-dim embedding using Hugging Face Serverless Inference API."""
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
+    payload = {"inputs": text}
+    
+    # Try up to 5 times (helps when Hugging Face is loading/warming up the model on demand)
+    for attempt in range(5):
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(HF_API_URL, headers=headers, json=payload)
+                if response.status_code == 200:
+                    val = response.json()
+                    # HF can return nested lists or flat list of floats
+                    if isinstance(val, list):
+                        if len(val) > 0 and isinstance(val[0], list):
+                            return [float(x) for x in val[0]]
+                        return [float(x) for x in val]
+                elif response.status_code == 503:
+                    # Model loading, wait and retry
+                    logger.warning("Hugging Face model is loading/warming up. Retrying in 5s (attempt %d/5)...", attempt+1)
+                    await asyncio.sleep(5)
+                    continue
+                else:
+                    logger.error("Hugging Face Inference API error %d: %s", response.status_code, response.text)
+        except Exception as e:
+            logger.error("Error connecting to Hugging Face Inference API: %s", e)
+            if attempt == 4:
+                raise
+        await asyncio.sleep(2)
+        
+    raise Exception("Failed to retrieve embeddings from Hugging Face Serverless Inference API after multiple attempts.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

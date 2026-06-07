@@ -135,8 +135,12 @@ def _get_cache_manager(gemini_key: str) -> PromptCacheManager:
 
 
 HF_TOKEN = os.getenv("HF_TOKEN")
-HF_MODEL_ID = "sentence-transformers/all-mpnet-base-v2"
-HF_API_URL = f"https://api-inference.huggingface.co/models/{HF_MODEL_ID}"
+HF_MODEL_ID = os.getenv("HF_MODEL_ID", "sentence-transformers/all-mpnet-base-v2")
+HF_API_URL = os.getenv("HF_API_URL", f"https://api-inference.huggingface.co/models/{HF_MODEL_ID}")
+
+# Sanitize to ensure the URL has a protocol prefix
+if HF_API_URL and not HF_API_URL.startswith("http"):
+    HF_API_URL = f"https://{HF_API_URL}"
 
 async def _compute_embedding(text: str, gemini_key: str) -> list[float]:
     """Compute a 768-dim embedding using Hugging Face Serverless Inference API."""
