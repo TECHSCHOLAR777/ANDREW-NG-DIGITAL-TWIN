@@ -47,6 +47,9 @@ export interface KnowledgeNodeData extends Record<string, unknown> {
   combinedScore:  number;
   metadata:       Record<string, unknown>;
   predicates:     string[];         // incoming predicates (for tooltip)
+  isDimmed?:      boolean;
+  isSelected?:    boolean;
+  isNeighbor?:    boolean;
 }
 
 /** Custom data attached to each React Flow edge. */
@@ -90,4 +93,6 @@ export const PREDICATE_COLORS: Record<string, string> = {
   has_prerequisite: "#9CA3AF",   // Muted Gray
   related_to:       "#D1D5DB",   // Gray
   used_in:          "#A78BFA",   // Violet
+  named:            "#14B8A6",   // Teal
+  is:               "#64748B",   // Slate
 };

@@ -21,8 +21,8 @@ import asyncio
 import json
 import logging
 import uuid
-import os
-import httpx
+import re
+from collections import deque
 from typing import Annotated
 
 import asyncpg
@@ -34,6 +34,8 @@ from fastapi import (
     HTTPException,
     Request,
 )
+from fastapi.responses import StreamingResponse
+import httpx
 from pydantic import BaseModel, Field
 
 from ..services.triplet_extractor import TripletExtractor
@@ -50,10 +52,7 @@ _cache_managers: dict[str, PromptCacheManager] = {}
 # DEPENDENCY: DB pool from app state
 # ─────────────────────────────────────────────────────────────────────────────
 async def get_db(request: Request) -> asyncpg.Pool:
-    pool = request.app.state.db_pool
-    if pool is None:
-        raise HTTPException(status_code=503, detail="Database connection is unavailable")
-    return pool
+    return request.app.state.db_pool
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -137,45 +136,35 @@ def _get_cache_manager(gemini_key: str) -> PromptCacheManager:
     return _cache_managers[gemini_key]
 
 
-HF_TOKEN = os.getenv("HF_TOKEN")
-HF_MODEL_ID = os.getenv("HF_MODEL_ID", "sentence-transformers/all-mpnet-base-v2")
-HF_API_URL = os.getenv("HF_API_URL", f"https://api-inference.huggingface.co/models/{HF_MODEL_ID}")
+_local_embed_model = None
 
-# Sanitize to ensure the URL has a protocol prefix
-if HF_API_URL and not HF_API_URL.startswith("http"):
-    HF_API_URL = f"https://{HF_API_URL}"
+def _get_local_embed_model():
+    global _local_embed_model
+    if _local_embed_model is None:
+        from sentence_transformers import SentenceTransformer
+        _local_embed_model = SentenceTransformer("all-mpnet-base-v2")
+    return _local_embed_model
 
-async def _compute_embedding(text: str, gemini_key: str) -> list[float]:
-    """Compute a 768-dim embedding using Hugging Face Serverless Inference API."""
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
-    payload = {"inputs": text}
-    
-    # Try up to 5 times (helps when Hugging Face is loading/warming up the model on demand)
-    for attempt in range(5):
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(HF_API_URL, headers=headers, json=payload)
-                if response.status_code == 200:
-                    val = response.json()
-                    # HF can return nested lists or flat list of floats
-                    if isinstance(val, list):
-                        if len(val) > 0 and isinstance(val[0], list):
-                            return [float(x) for x in val[0]]
-                        return [float(x) for x in val]
-                elif response.status_code == 503:
-                    # Model loading, wait and retry
-                    logger.warning("Hugging Face model is loading/warming up. Retrying in 5s (attempt %d/5)...", attempt+1)
-                    await asyncio.sleep(5)
-                    continue
-                else:
-                    logger.error("Hugging Face Inference API error %d: %s", response.status_code, response.text)
-        except Exception as e:
-            logger.error("Error connecting to Hugging Face Inference API: %s", e)
-            if attempt == 4:
-                raise
-        await asyncio.sleep(2)
-        
-    raise Exception("Failed to retrieve embeddings from Hugging Face Serverless Inference API after multiple attempts.")
+
+def preload_local_embed_model():
+    """Warms up the sentence-transformers model to avoid delay on first request."""
+    logger.info("Preloading sentence-transformers model...")
+    _get_local_embed_model()
+    logger.info("Sentence-transformers model loaded.")
+
+
+
+async def _compute_embedding(
+    text: str, gemini_key: str
+) -> list[float]:
+    """Compute a 768-dim embedding locally using sentence-transformers."""
+    loop = asyncio.get_event_loop()
+    model = _get_local_embed_model()
+    result = await loop.run_in_executor(
+        None,
+        lambda: model.encode(text).tolist()
+    )
+    return result
 
 
 async def _run_hybrid_retrieval(
@@ -212,7 +201,7 @@ async def _run_graph_traversal(
     tenant_id: str,
     embedding: list[float],
 ) -> list[asyncpg.Record]:
-    """Call the vector_anchored_subgraph SQL function."""
+    """Call the vector_anchored_subgraph SQL function globally (no session limit)."""
     async with db.acquire() as conn:
         rows = await conn.fetch(
             """
@@ -220,7 +209,9 @@ async def _run_graph_traversal(
                 $1::uuid,    -- tenant_id
                 $2::vector,  -- query_embedding
                 5,           -- top_k anchor nodes
-                0.5          -- cosine threshold
+                0.5,         -- cosine threshold
+                NULL,        -- predicates
+                NULL         -- global traversal (no session limit)
             )
             """,
             uuid.UUID(tenant_id),
@@ -229,36 +220,106 @@ async def _run_graph_traversal(
     return rows
 
 
-def _build_graph_context_summary(graph_nodes: list[asyncpg.Record]) -> str:
+async def _build_graph_context_summary(
+    db: asyncpg.Pool,
+    tenant_id: str,
+    current_session_id: str,
+    graph_nodes: list[asyncpg.Record],
+) -> str:
     """
-    Convert graph traversal results into a concise text summary
-    injected into the dynamic (non-cached) part of the prompt.
+    Convert global graph traversal results (across all chat sessions under the same tenant)
+    into a structured text summary, prioritizing active session relationships first,
+    followed by past memory recall from other sessions.
     """
-    if not graph_nodes:
+    node_uuids = [row["node_id"] for row in graph_nodes]
+    if not node_uuids:
         return "No prior knowledge graph data available for this student."
 
-    lines = ["STUDENT LEARNING GRAPH:"]
-    struggling = [n for n in graph_nodes if "struggles_with" in str(n.get("predicates_path", []))]
-    mastered   = [n for n in graph_nodes if "mastered"       in str(n.get("predicates_path", []))]
-    curious    = [n for n in graph_nodes if "curious_about"  in str(n.get("predicates_path", []))]
+    sess_uuid = uuid.UUID(current_session_id)
+    ten_uuid = uuid.UUID(tenant_id)
 
-    if struggling:
-        lines.append("  Struggling with: " + ", ".join(
-            n["canonical_name"] for n in struggling[:3]
-        ))
-    if mastered:
-        lines.append("  Has mastered: " + ", ".join(
-            n["canonical_name"] for n in mastered[:3]
-        ))
-    if curious:
-        lines.append("  Curious about: " + ", ".join(
-            n["canonical_name"] for n in curious[:3]
-        ))
+    async with db.acquire() as conn:
+        # 1. Look up student name globally under this tenant
+        student_name = await conn.fetchval(
+            """
+            SELECT en_obj.canonical_name
+            FROM relation_edges re
+            JOIN entity_nodes en_sub ON en_sub.id = re.subject_id
+            JOIN entity_nodes en_obj ON en_obj.id = re.object_id
+            WHERE re.tenant_id = $1::uuid
+              AND re.predicate = 'named'
+              AND en_sub.node_type = 'Student'
+            LIMIT 1
+            """,
+            ten_uuid
+        )
 
-    # Include all nodes for completeness
-    all_concepts = [n["canonical_name"] for n in graph_nodes[:10]]
-    lines.append("  Related concepts: " + ", ".join(all_concepts))
+        # 2. Get relation edges touching our traversed nodes
+        edge_rows = await conn.fetch(
+            """
+            SELECT re.session_id, re.predicate, re.weight, COALESCE(re.evidence, '') as evidence,
+                   en_sub.canonical_name as subject_name, en_sub.node_type as subject_type,
+                   en_obj.canonical_name as object_name, en_obj.node_type as object_type
+            FROM relation_edges re
+            JOIN entity_nodes en_sub ON en_sub.id = re.subject_id
+            JOIN entity_nodes en_obj ON en_obj.id = re.object_id
+            WHERE re.tenant_id = $1::uuid
+              AND (re.subject_id = ANY($2::uuid[]) OR re.object_id = ANY($2::uuid[]))
+            ORDER BY re.weight DESC, re.created_at DESC
+            LIMIT 100
+            """,
+            ten_uuid,
+            node_uuids
+        )
+
+    active_lines = []
+    past_lines = []
+    seen = set()
+
+    for row in edge_rows:
+        sub = row["subject_name"]
+        if row["subject_type"] == "Student" and student_name:
+            sub = student_name
+        obj = row["object_name"]
+        if row["object_type"] == "Student" and student_name:
+            obj = student_name
+        
+        pred = row["predicate"]
+        key = (sub, pred, obj)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        evidence = row["evidence"].strip()
+        ev_str = f" (Evidence: \"{evidence}\")" if evidence else ""
+        line = f"- {sub} -[{pred}]-> {obj}{ev_str}"
+
+        # If session_id matches, it's active context. If session_id is NULL or different, it's past memory
+        if row["session_id"] == sess_uuid:
+            active_lines.append(line)
+        else:
+            past_lines.append(line)
+
+    lines = []
+    if student_name:
+        lines.append(f"STUDENT PROFILE: Name is {student_name}.")
+    else:
+        lines.append("STUDENT PROFILE: Name is unknown.")
+
+    lines.append("\nACTIVE SESSION RELATIONSHIPS (Focus on these topics in the current discussion):")
+    if active_lines:
+        lines.extend(active_lines)
+    else:
+        lines.append("- (No active session relationships recorded yet for these concepts)")
+
+    lines.append("\nPAST MEMORY RECALL (Recalled from other chat sessions - use zero-shot memory to personalize):")
+    if past_lines:
+        lines.extend(past_lines)
+    else:
+        lines.append("- (No past memory relationships found for these concepts)")
+    
     return "\n".join(lines)
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -304,14 +365,14 @@ async def chat_message(
     else:
         embedding = await _compute_embedding(body.message, gemini_key)
 
-    # ── Step 2: Parallel retrieval ─────────────────────────────────────────
+    # ── Step 2: Parallel retrieval (session-scoped) ────────────────────────
     chunk_rows, graph_rows = await asyncio.gather(
         _run_hybrid_retrieval(db, tenant_id, embedding, body.message, body.top_k_chunks),
         _run_graph_traversal(db, tenant_id, embedding),
     )
 
     chunk_texts = [row["chunk_text"] for row in chunk_rows]
-    graph_summary = _build_graph_context_summary(graph_rows)
+    graph_summary = await _build_graph_context_summary(db, tenant_id, body.session_id, graph_rows)
 
     # ── Step 3 & 4: Cache + Generate ──────────────────────────────────────
     cache_manager = _get_cache_manager(gemini_key)
@@ -399,6 +460,7 @@ async def chat_message(
         turn_id         = turn_id,
         user_content    = body.message,
         assistant_content = assistant_reply,
+        session_id      = uuid.UUID(body.session_id),
     )
 
     # ── Step 7: Return ─────────────────────────────────────────────────────
@@ -430,6 +492,39 @@ async def chat_message(
     )
 
 
+@router.get("/tts")
+async def get_tts_stream(text: str):
+    """
+    Synthesize text-to-speech using the local Chatterbox service (port 5002)
+    and stream back the synthesized WAV audio chunks.
+    """
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="Text cannot be empty")
+
+    chatterbox_url = "http://127.0.0.1:5002/v1/audio/speech"
+    payload = {
+        "model": "tts-1",
+        "input": text,
+        "voice": "andrew_ng_ref"
+    }
+
+    async def audio_stream_generator():
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            try:
+                async with client.stream("POST", chatterbox_url, json=payload) as response:
+                    if response.status_code != 200:
+                        error_detail = await response.aread()
+                        logger.error("Chatterbox API error: status %d, detail: %s", response.status_code, error_detail)
+                        raise HTTPException(status_code=502, detail=f"Chatterbox TTS failed: status {response.status_code}")
+                    async for chunk in response.iter_bytes():
+                        yield chunk
+            except httpx.RequestError as exc:
+                logger.error("Failed to connect to Chatterbox server at %s: %s", chatterbox_url, exc)
+                raise HTTPException(status_code=502, detail="Chatterbox server is unavailable or timed out")
+
+    return StreamingResponse(audio_stream_generator(), media_type="audio/wav")
+
+
 class TripletRow(BaseModel):
     node_id:         str
     canonical_name:  str
@@ -458,44 +553,124 @@ class GraphPayload(BaseModel):
 @router.get("/graph/{session_id}", response_model=GraphPayload)
 async def get_session_graph(
     session_id: str,
+    view:       str = "session",   # "session" or "global"
     db:         asyncpg.Pool = Depends(get_db),
     keys:       dict         = Depends(get_api_keys),
 ) -> GraphPayload:
     """
-    Return the full knowledge graph (nodes + edges) for a session/tenant.
+    Return the session or global knowledge graph (nodes + edges).
     Used by the React Flow visualizer component.
     """
     tenant_id = keys["tenant_id"]
+    session_uuid = uuid.UUID(session_id)
 
     async with db.acquire() as conn:
-        node_rows = await conn.fetch(
-            """
-            SELECT id, canonical_name, node_type, metadata
-            FROM entity_nodes
-            WHERE tenant_id = $1::uuid
-            """,
-            uuid.UUID(tenant_id),
-        )
-        edge_rows = await conn.fetch(
-            """
-            SELECT id, subject_id, predicate, object_id, weight, coalesce(evidence, '') as evidence
-            FROM relation_edges
-            WHERE tenant_id = $1::uuid
-            ORDER BY weight DESC
-            LIMIT 150
-            """,
-            uuid.UUID(tenant_id),
-        )
+        if view == "global":
+            edge_rows = await conn.fetch(
+                """
+                SELECT id, subject_id, predicate, object_id, weight, coalesce(evidence, '') as evidence
+                FROM relation_edges
+                WHERE tenant_id = $1::uuid
+                ORDER BY weight DESC
+                LIMIT 150
+                """,
+                uuid.UUID(tenant_id),
+            )
+        else:
+            edge_rows = await conn.fetch(
+                """
+                SELECT id, subject_id, predicate, object_id, weight, coalesce(evidence, '') as evidence
+                FROM relation_edges
+                WHERE tenant_id = $1::uuid AND session_id = $2::uuid
+                ORDER BY weight DESC
+                LIMIT 150
+                """,
+                uuid.UUID(tenant_id),
+                session_uuid,
+            )
+
+        # Collect exact node IDs connected by these edges
+        node_ids = set()
+        for r in edge_rows:
+            node_ids.add(r["subject_id"])
+            node_ids.add(r["object_id"])
+
+        if node_ids:
+            node_rows = await conn.fetch(
+                """
+                SELECT en.id, en.canonical_name, en.node_type, en.metadata,
+                       (
+                           SELECT en_name.canonical_name
+                           FROM relation_edges re_name
+                           JOIN entity_nodes en_name ON en_name.id = re_name.object_id
+                           WHERE re_name.tenant_id = $1::uuid 
+                             AND re_name.subject_id = en.id
+                             AND re_name.predicate IN ('named', 'is')
+                           LIMIT 1
+                       ) AS resolved_student_name
+                FROM entity_nodes en
+                WHERE en.tenant_id = $1::uuid AND en.id = ANY($2::uuid[])
+                """,
+                uuid.UUID(tenant_id),
+                list(node_ids),
+            )
+        else:
+            node_rows = []
+
+    # ── Compute hop_distance via BFS from Student nodes ───────────────────
+    # Build adjacency list from edges (undirected for hop counting)
+    adjacency: dict[str, set[str]] = {}
+    edge_weights: dict[str, float] = {}  # node_id → max edge weight
+    for r in edge_rows:
+        sid = str(r["subject_id"])
+        oid = str(r["object_id"])
+        adjacency.setdefault(sid, set()).add(oid)
+        adjacency.setdefault(oid, set()).add(sid)
+        w = float(r["weight"])
+        edge_weights[sid] = max(edge_weights.get(sid, 0.0), w)
+        edge_weights[oid] = max(edge_weights.get(oid, 0.0), w)
+
+    # Find Student nodes as BFS roots (hop 0)
+    node_type_map = {str(row["id"]): row["node_type"] for row in node_rows}
+    student_ids = {nid for nid, nt in node_type_map.items() if nt == "Student"}
+
+    hop_distances: dict[str, int] = {}
+    queue: deque[tuple[str, int]] = deque()
+    for sid in student_ids:
+        hop_distances[sid] = 0
+        queue.append((sid, 0))
+
+    while queue:
+        current, depth = queue.popleft()
+        for neighbor in adjacency.get(current, set()):
+            if neighbor not in hop_distances:
+                hop_distances[neighbor] = depth + 1
+                queue.append((neighbor, depth + 1))
+
+    # Nodes unreachable from any Student get hop = 1 (direct concept)
+    for nid in node_type_map:
+        if nid not in hop_distances:
+            hop_distances[nid] = 1
 
     nodes = []
     for row in node_rows:
         node_type = row["node_type"]
-        hop = 0 if node_type == "Student" else 1
-        score = 1.0 if node_type == "Student" else 0.6
+        nid = str(row["id"])
+        hop = hop_distances.get(nid, 1)
+        # Score: Student=1.0, then decay by hop, boosted by edge weight
+        max_w = edge_weights.get(nid, 0.5)
+        score = 1.0 if node_type == "Student" else round(
+            min(1.0, max_w * (0.9 ** hop)), 3
+        )
+        # Rename "Student" canonical label to a user-friendly name if they have one
+        canonical_name = row["canonical_name"]
+        if node_type == "Student":
+            canonical_name = row["resolved_student_name"] or "You"
+
         nodes.append(
             TripletRow(
-                node_id        = str(row["id"]),
-                canonical_name = row["canonical_name"],
+                node_id        = nid,
+                canonical_name = canonical_name,
                 node_type      = node_type,
                 metadata       = json.loads(row["metadata"]) if isinstance(row["metadata"], str) else row["metadata"] or {},
                 hop_distance   = hop,

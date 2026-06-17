@@ -68,9 +68,21 @@ export function mapTripletRowsToReactFlow(
   // ── Step 3: Build React Flow edge objects ─────────────────────────────────
   // Filter to only include edges where both endpoints exist in our node set
   const nodeIds = new Set(nodeMap.keys());
-  const rfEdges: KnowledgeEdge[] = edges
-    .filter((e) => nodeIds.has(e.subject_id) && nodeIds.has(e.object_id))
-    .map((e) => buildEdge(e));
+  
+  // Group edges by subject_id -> object_id to avoid visual overlaps on same paths
+  const edgeGroups = new Map<string, EdgeRow[]>();
+  for (const e of edges) {
+    if (!nodeIds.has(e.subject_id) || !nodeIds.has(e.object_id)) continue;
+    const key = `${e.subject_id}->${e.object_id}`;
+    if (!edgeGroups.has(key)) {
+      edgeGroups.set(key, []);
+    }
+    edgeGroups.get(key)!.push(e);
+  }
+
+  const rfEdges: KnowledgeEdge[] = Array.from(edgeGroups.values()).map((group) =>
+    buildCombinedEdge(group)
+  );
 
   // ── Step 4: Apply d3-force layout ─────────────────────────────────────────
   const positionedNodes = applyForceLayout(rfNodes, rfEdges, width, height);
@@ -101,22 +113,23 @@ function buildNode(row: TripletRow): KnowledgeNode {
     // React Flow node style — overridden by custom node component, but
     // provides sensible defaults for the built-in node renderer fallback.
     style: {
-      background:   baseColor,
-      color:        "#ffffff",
-      borderRadius: "50%",
-      border:       `3px solid ${lighten(baseColor, 0.3)}`,
-      width:        nodeSize(row.combined_score),
-      height:       nodeSize(row.combined_score),
-      fontSize:     "11px",
+      background:   "#ffffff",
+      color:        "#111827",
+      borderRadius: "8px",
+      border:       `1px solid #e5e7eb`,
+      borderLeft:   `6px solid ${baseColor}`,
+      width:        160,
+      height:       80,
+      fontSize:     "12px",
       fontWeight:   "600",
       display:      "flex",
       alignItems:   "center",
       justifyContent: "center",
       textAlign:    "center",
-      padding:      "4px",
+      padding:      "8px",
       boxShadow:    row.hop_distance === 0
-        ? `0 0 20px ${baseColor}88`   // anchor nodes glow
-        : "0 2px 6px rgba(0,0,0,0.2)",
+        ? `0 0 15px ${baseColor}44, 0 4px 6px rgba(0,0,0,0.05)`
+        : "0 2px 6px rgba(0,0,0,0.05)",
     },
   };
 }
@@ -124,26 +137,64 @@ function buildNode(row: TripletRow): KnowledgeNode {
 // ─────────────────────────────────────────────────────────────────────────────
 // EDGE BUILDER
 // ─────────────────────────────────────────────────────────────────────────────
+// EDGE BUILDER
+// ─────────────────────────────────────────────────────────────────────────────
 
-function buildEdge(row: EdgeRow): KnowledgeEdge {
-  const edgeColor = PREDICATE_COLORS[row.predicate] ?? "#94a3b8";
-  const strokeWidth = Math.max(1, Math.min(row.weight * 2.5, 6));
+const PREDICATE_PRIORITY: Record<string, number> = {
+  struggles_with:   10,
+  confused_about:   9,
+  wants_to_learn:   8,
+  curious_about:    7,
+  mastered:         6,
+  studied:          5,
+  applied:          4,
+  works_in:         3,
+  used_in:          2,
+  has_prerequisite: 1,
+  related_to:       0,
+};
+
+function buildCombinedEdge(group: EdgeRow[]): KnowledgeEdge {
+  // Sort group by predicate priority descending
+  const sorted = [...group].sort((a, b) => {
+    const prioA = PREDICATE_PRIORITY[a.predicate] ?? 0;
+    const prioB = PREDICATE_PRIORITY[b.predicate] ?? 0;
+    return prioB - prioA;
+  });
+
+  const primary = sorted[0];
+  const edgeColor = PREDICATE_COLORS[primary.predicate] ?? "#94a3b8";
+  
+  // Combine weights: use the maximum weight
+  const maxWeight = Math.max(...group.map((e) => e.weight));
+  const strokeWidth = Math.max(1, Math.min(maxWeight * 2.5, 6));
+
+  // Combine predicates into a deduplicated label
+  const uniquePredicates = Array.from(new Set(group.map((e) => e.predicate)));
+  const combinedLabel = uniquePredicates.map(formatPredicate).join(" & ");
+
+  // Animate if any of the edges is struggles_with
+  const isAnimated = group.some((e) => e.predicate === "struggles_with");
 
   return {
-    id:     row.id,
-    source: row.subject_id,
-    target: row.object_id,
+    id:     `${primary.subject_id}->${primary.object_id}`,
+    source: primary.subject_id,
+    target: primary.object_id,
     type:   "smoothstep",
-    animated: row.predicate === "struggles_with",  // animate "struggles" edges
-    label:  formatPredicate(row.predicate),
+    animated: isAnimated,
+    label:  combinedLabel,
     labelStyle: {
       fontSize:   "9px",
-      fontWeight: "500",
+      fontWeight: "600",
       fill:       edgeColor,
     },
     labelBgStyle: {
-      fill:    "#0f172a",
-      fillOpacity: 0.7,
+      fill:        "#ffffff",
+      fillOpacity: 0.95,
+      stroke:      "#e5e7eb",
+      strokeWidth: 1,
+      rx:          4,
+      ry:          4,
     },
     style: {
       stroke:      edgeColor,
@@ -157,9 +208,9 @@ function buildEdge(row: EdgeRow): KnowledgeEdge {
       height: 12,
     },
     data: {
-      predicate: row.predicate,
-      weight:    row.weight,
-      evidence:  row.evidence,
+      predicate: primary.predicate,
+      weight:    maxWeight,
+      evidence:  group.map((e) => e.evidence).filter(Boolean).join(" | "),
     },
   };
 }
@@ -221,17 +272,17 @@ function applyForceLayout(
       d3
         .forceLink<SimNode, SimLink>(simLinks)
         .id((d) => d.id)
-        .distance(140)
+        .distance(165)
         .strength((l) => 0.3 + l.weight * 0.4),
     )
     // Repulsion between all nodes (Barnes-Hut)
-    .force("charge", d3.forceManyBody<SimNode>().strength(-500).theta(0.9))
+    .force("charge", d3.forceManyBody<SimNode>().strength(-650).theta(0.9))
     // Center gravity
     .force("center", d3.forceCenter(width / 2, height / 2).strength(0.08))
-    // Prevent overlap based on node size
+    // Prevent overlap based on capsule dimensions
     .force(
       "collide",
-      d3.forceCollide<SimNode>().radius((d) => d.size / 2 + 12).strength(0.9),
+      d3.forceCollide<SimNode>().radius(105).strength(0.9),
     )
     // Concentric radial force: anchor nodes (hop=0) go to center
     .force(

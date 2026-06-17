@@ -59,44 +59,73 @@ const KnowledgeNodeComponent: React.FC<NodeProps<KnowledgeNode>> = ({
   selected,
 }) => {
   const color = NODE_TYPE_COLORS[data.nodeType] ?? "#64748b";
-  const size  = Math.round(40 + data.combinedScore * 40);
 
   return (
     <div
       style={{
-        width:           size,
-        height:          size,
-        borderRadius:    "50%",
-        background:      `radial-gradient(circle at 35% 35%, ${lighten(color, 0.4)}, ${color})`,
-        border:          `3px solid ${selected ? "#fff" : lighten(color, 0.5)}`,
+        width:           160,
+        height:          80,
+        borderRadius:    "8px",
+        background:      "#FFFFFF",
+        borderTop:       selected ? "1.5px solid #1A56DB" : "1px solid #E5E7EB",
+        borderRight:     selected ? "1.5px solid #1A56DB" : "1px solid #E5E7EB",
+        borderBottom:    selected ? "1.5px solid #1A56DB" : "1px solid #E5E7EB",
+        borderLeft:      `6px solid ${color}`,
         boxShadow:       data.hopDistance === 0
-          ? `0 0 24px ${color}99, 0 0 8px ${color}55`
+          ? `0 4px 12px rgba(0,0,0,0.06), 0 0 10px ${color}22`
           : selected
-          ? `0 0 16px ${color}66`
-          : "0 2px 8px rgba(0,0,0,0.3)",
+          ? `0 0 0 2px ${color}22, 0 4px 10px rgba(0,0,0,0.08)`
+          : "0 2px 6px rgba(0,0,0,0.04)",
         display:         "flex",
         flexDirection:   "column",
-        alignItems:      "center",
-        justifyContent:  "center",
-        padding:         "4px",
+        justifyContent:  "space-between",
+        padding:         "8px 10px",
         cursor:          "pointer",
-        transition:      "box-shadow 0.2s ease",
+        transition:      "box-shadow 0.2s ease, border-color 0.2s ease",
         position:        "relative",
+        boxSizing:       "border-box",
       }}
     >
       {/* React Flow handles (invisible, for edge routing) */}
       <Handle type="target" position={Position.Top}    style={{ opacity: 0 }} />
       <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
 
+      {/* Top Header Row */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
+        <span
+          style={{
+            fontSize:       8,
+            fontWeight:     600,
+            color:          "#9CA3AF",
+            textTransform:  "uppercase",
+            letterSpacing:  "0.05em",
+          }}
+        >
+          {data.nodeType}
+        </span>
+        <span
+          style={{
+            fontSize:       9,
+            fontWeight:     700,
+            color:          color,
+            background:     `${color}12`,
+            padding:        "1px 4px",
+            borderRadius:   "4px",
+          }}
+        >
+          {(data.combinedScore * 100).toFixed(0)}%
+        </span>
+      </div>
+
       {/* Node label */}
-      <span
+      <div
         style={{
-          fontSize:    Math.max(8, Math.min(11, size / 7)),
-          fontWeight:  700,
-          color:       "#ffffff",
-          textAlign:   "center",
-          lineHeight:  1.2,
-          maxWidth:    size - 12,
+          fontSize:    12,
+          fontWeight:  600,
+          color:       "#1F2937",
+          textAlign:   "left",
+          lineHeight:  1.25,
+          width:       "100%",
           overflow:    "hidden",
           textOverflow: "ellipsis",
           display:     "-webkit-box",
@@ -105,34 +134,43 @@ const KnowledgeNodeComponent: React.FC<NodeProps<KnowledgeNode>> = ({
         }}
       >
         {data.label}
-      </span>
+      </div>
 
-      {/* Node type badge */}
-      <span
-        style={{
-          fontSize:       7,
-          color:          "rgba(255,255,255,0.7)",
-          textTransform:  "uppercase",
-          letterSpacing:  "0.05em",
-          marginTop:      2,
-        }}
-      >
-        {data.nodeType}
-      </span>
+      {/* Bottom Footer Row */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
+        <span style={{ fontSize: 9, color: "#9CA3AF" }}>
+          Hop {data.hopDistance}
+        </span>
 
-      {/* Hop distance indicator (ring for anchor nodes) */}
-      {data.hopDistance === 0 && (
-        <div
-          style={{
-            position:     "absolute",
-            inset:        -6,
-            borderRadius: "50%",
-            border:       `2px dashed ${color}`,
-            animation:    "spin 8s linear infinite",
-            opacity:      0.5,
-          }}
-        />
-      )}
+        {/* Hop distance indicator (ring/dot for anchor nodes) */}
+        {data.hopDistance === 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: "3px" }}>
+            <span style={{ fontSize: 8, fontWeight: 700, color: "#10B981", textTransform: "uppercase" }}>
+              Anchor
+            </span>
+            <span style={{ position: "relative", display: "flex", height: "6px", width: "6px" }}>
+              <span style={{
+                position: "absolute",
+                display: "inline-flex",
+                height: "100%",
+                width: "100%",
+                borderRadius: "50%",
+                backgroundColor: "#10B981",
+                opacity: 0.75,
+                animation: "ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite"
+              }} />
+              <span style={{
+                position: "relative",
+                display: "inline-flex",
+                borderRadius: "50%",
+                height: "6px",
+                width: "6px",
+                backgroundColor: "#10B981"
+              }} />
+            </span>
+          </div>
+        )}
+      </div>
     </div>
   );
 };
@@ -186,14 +224,24 @@ const GraphLegend: React.FC = () => (
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface NodeDetailProps {
-  node:     KnowledgeNode | null;
-  onClose:  () => void;
-  onExplore?: (label: string) => void;
+  node:      KnowledgeNode | null;
+  allEdges:  KnowledgeEdge[];
+  allNodes:  KnowledgeNode[];
+  onClose:   () => void;
+  onExplore?:(label: string) => void;
 }
 
-const NodeDetailPanel: React.FC<NodeDetailProps> = ({ node, onClose, onExplore }) => {
+const NodeDetailPanel: React.FC<NodeDetailProps> = ({ node, allEdges, allNodes, onClose, onExplore }) => {
   if (!node) return null;
-  const color = NODE_TYPE_COLORS[node.data.nodeType];
+  const color = NODE_TYPE_COLORS[node.data.nodeType] ?? "#64748b";
+
+  const metadataEntries = Object.entries(node.data.metadata || {}).filter(
+    ([_, val]) => val !== null && val !== undefined && val !== "" && (typeof val !== "object" || Object.keys(val).length > 0)
+  );
+
+  const connections = allEdges.filter(
+    (edge) => edge.source === node.id || edge.target === node.id
+  );
 
   return (
     <div
@@ -202,15 +250,16 @@ const NodeDetailPanel: React.FC<NodeDetailProps> = ({ node, onClose, onExplore }
         border:        `1px solid #E5E7EB`,
         borderRadius:  12,
         padding:       "16px 20px",
-        minWidth:      220,
-        boxShadow:     `0 4px 12px rgba(0,0,0,0.05)`,
+        minWidth:      240,
+        maxWidth:      300,
+        boxShadow:     `0 4px 16px rgba(0,0,0,0.06)`,
       }}
     >
       <div style={{ display: "flex", justifyContent: "space-between",
                     alignItems: "flex-start", marginBottom: 12 }}>
         <div>
-          <p style={{ color: "#111827", fontWeight: 500, fontSize: 14,
-                      marginBottom: 2 }}>
+          <p style={{ color: "#111827", fontWeight: 600, fontSize: 14,
+                      marginBottom: 4, lineHeight: 1.2 }}>
             {node.data.label}
           </p>
           <span style={{ background: color, color: "#fff", borderRadius: 4,
@@ -221,16 +270,17 @@ const NodeDetailPanel: React.FC<NodeDetailProps> = ({ node, onClose, onExplore }
         </div>
         <button
           onClick={onClose}
-          style={{ background: "none", border: "none", color: "#64748b",
-                   cursor: "pointer", fontSize: 16, padding: 0 }}
+          style={{ background: "none", border: "none", color: "#9CA3AF",
+                   cursor: "pointer", fontSize: 20, padding: 0, lineHeight: 1 }}
         >
           ×
         </button>
       </div>
 
-      <div style={{ marginBottom: 8 }}>
-        <p style={{ color: "#6B7280", fontSize: 11, fontWeight: 500,
-                    letterSpacing: "0.07em", textTransform: "none", marginBottom: 4 }}>
+      {/* Relevance Score */}
+      <div style={{ marginBottom: 12 }}>
+        <p style={{ color: "#6B7280", fontSize: 10, fontWeight: 500,
+                    letterSpacing: "0.05em", textTransform: "uppercase", marginBottom: 4 }}>
           Relevance score
         </p>
         <div style={{ background: "#F3F4F6", borderRadius: 4, height: 6 }}>
@@ -242,36 +292,89 @@ const NodeDetailPanel: React.FC<NodeDetailProps> = ({ node, onClose, onExplore }
             transition:   "width 0.5s ease",
           }} />
         </div>
-        <p style={{ color: "#9CA3AF", fontSize: 11, marginTop: 2 }}>
+        <p style={{ color: "#9CA3AF", fontSize: 10, marginTop: 4 }}>
           {(node.data.combinedScore * 100).toFixed(0)}% · Hop {node.data.hopDistance}
         </p>
       </div>
 
-      {node.data.predicates.length > 0 && (
-        <div style={{ marginBottom: 4 }}>
-          <p style={{ color: "#6B7280", fontSize: 11, fontWeight: 500,
-                      letterSpacing: "0.07em", textTransform: "none", marginBottom: 4 }}>
-            Relationships
+      {/* Dynamic Metadata / Properties */}
+      {metadataEntries.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <p style={{ color: "#6B7280", fontSize: 10, fontWeight: 500,
+                      letterSpacing: "0.05em", textTransform: "uppercase", marginBottom: 6 }}>
+            Properties
           </p>
-          {node.data.predicates.map((p, i) => (
-            <span
-              key={i}
-              style={{
-                display:      "inline-block",
-                background:   (PREDICATE_COLORS[p] ?? "#64748b") + "15",
-                color:        PREDICATE_COLORS[p] ?? "#6B7280",
-                borderRadius: 4,
-                padding:      "2px 8px",
-                fontSize:     10,
-                margin:       "2px",
-                border:       `1px solid ${(PREDICATE_COLORS[p] ?? "#64748b")}25`,
-              }}
-            >
-              {p.replace(/_/g, " ")}
-            </span>
-          ))}
+          <div style={{ background: "#F9FAFB", borderRadius: 8, border: "1px solid #E5E7EB", padding: "6px 8px" }}>
+            {metadataEntries.map(([key, val]) => (
+              <div key={key} style={{ display: "flex", justifyContent: "space-between", fontSize: 10, margin: "4px 0" }}>
+                <span style={{ color: "#6B7280", fontWeight: 500, textTransform: "capitalize" }}>{key.replace(/_/g, " ")}</span>
+                <span style={{ color: "#111827", textAlign: "right", fontWeight: 500 }}>
+                  {typeof val === "object" ? JSON.stringify(val) : String(val)}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
+
+      {/* True Connections Section */}
+      <div style={{ marginBottom: 4 }}>
+        <p style={{ color: "#6B7280", fontSize: 10, fontWeight: 500,
+                    letterSpacing: "0.05em", textTransform: "uppercase", marginBottom: 6 }}>
+          Connections ({connections.length})
+        </p>
+        {connections.length > 0 ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 180, overflowY: "auto" }}>
+            {connections.map((edge) => {
+              const isOutbound = edge.source === node.id;
+              const partnerId = isOutbound ? edge.target : edge.source;
+              const partnerNode = allNodes.find((n) => n.id === partnerId);
+              const partnerLabel = partnerNode?.data?.label || partnerId;
+              const partnerColor = partnerNode ? (NODE_TYPE_COLORS[partnerNode.data.nodeType] ?? "#64748b") : "#64748b";
+              const predicate = edge.data?.predicate ?? "related_to";
+              const predicateColor = PREDICATE_COLORS[predicate] ?? "#6B7280";
+
+              return (
+                <div
+                  key={edge.id}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    background: "#F9FAFB",
+                    border: "1px solid #E5E7EB",
+                    borderRadius: 6,
+                    padding: "6px 8px",
+                    fontSize: 10,
+                    lineHeight: 1.3,
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", width: "100%" }}>
+                    {isOutbound ? (
+                      <>
+                        <span style={{ color: "#9CA3AF" }}>→</span>
+                        <span style={{ fontWeight: 600, color: predicateColor }}>
+                          {String(edge.label || predicate).replace(/_/g, " ")}
+                        </span>
+                        <span style={{ color: partnerColor, fontWeight: 600 }}>{partnerLabel}</span>
+                      </>
+                    ) : (
+                      <>
+                        <span style={{ color: partnerColor, fontWeight: 600 }}>{partnerLabel}</span>
+                        <span style={{ fontWeight: 600, color: predicateColor }}>
+                          {String(edge.label || predicate).replace(/_/g, " ")}
+                        </span>
+                        <span style={{ color: "#9CA3AF" }}>→</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p style={{ color: "#9CA3AF", fontSize: 10, fontStyle: "italic" }}>No active connections in graph view.</p>
+        )}
+      </div>
 
       {onExplore && (
         <button
@@ -475,6 +578,8 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
           <Panel position="top-right">
             <NodeDetailPanel
               node={selectedNode}
+              allEdges={rfEdges}
+              allNodes={nodes}
               onClose={() => setSelectedNode(null)}
               onExplore={onExploreNode}
             />
@@ -499,11 +604,15 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
         </Panel>
       </ReactFlow>
 
-      {/* Spinning animation keyframe (injected once) */}
+      {/* Spinning and ping animation keyframes (injected once) */}
       <style>{`
         @keyframes spin {
           from { transform: rotate(0deg); }
           to   { transform: rotate(360deg); }
+        }
+        @keyframes ping {
+          0% { transform: scale(1); opacity: 1; }
+          70%, 100% { transform: scale(2.2); opacity: 0; }
         }
       `}</style>
     </div>

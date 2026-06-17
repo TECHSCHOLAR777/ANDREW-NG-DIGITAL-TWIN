@@ -24,31 +24,6 @@ import type { TripletRow, EdgeRow } from "../types/graph";
 const KEY_LOCAL_STORAGE_GEMINI = "andrew_ng_byok_key";
 const KEY_LOCAL_STORAGE_TENANT = "andrew_ng_tenant_uuid";
 
-// Self-correcting API Endpoint configuration helper
-const resolveApiUrl = (baseUrl: string) => {
-  let url = baseUrl.trim().replace(/\/$/, "");
-  
-  // Force HTTPS for production render domains to prevent Mixed Content blocks
-  if (url.includes("onrender.com") && url.startsWith("http://")) {
-    url = url.replace("http://", "https://");
-  }
-  
-  if (!url.includes("/api/v1/chat")) {
-    if (url.includes("/api/v1")) {
-      url = `${url}/chat`;
-    } else if (url.includes("/api")) {
-      url = `${url}/v1/chat`;
-    } else {
-      url = `${url}/api/v1/chat`;
-    }
-  }
-  return url;
-};
-
-// Ensure fallback also gracefully defaults if Vercel environment injection lags
-const rawUrl = process.env.NEXT_PUBLIC_API_URL || "https://digital-twin-gzgi.onrender.com";
-const API_BASE_URL = resolveApiUrl(rawUrl);
-
 interface RetrievedChunk {
   source_file: string;
   source_type: string;
@@ -74,9 +49,23 @@ interface ChatSession {
 function formatMessageContent(text: string): React.ReactNode {
   if (!text) return null;
 
-  // 1. Pre-process LaTeX math symbols to unicode equivalents
+  // 1. Pre-process LaTeX math symbols to unicode equivalents and clean text representations
   let processed = text;
+
+  // Replace common LaTeX fractions: \frac{a}{b} -> (a)/(b)
+  processed = processed.replace(/\\frac\{([^}]+)\}\{([^}]+)\}/g, "($1)/($2)");
+
+  // Replace LaTeX sum: \sum_{a}^{b} -> Σ_{a}^{b}
+  processed = processed.replace(/\\sum_\{([^}]+)\}\^\{([^}]+)\}/g, "Σ_{$1}^{$2}");
+  processed = processed.replace(/\\sum_\{([^}]+)\}/g, "Σ_{$1}");
+
+  // Replace subscript formatting to subscript representation: e.g. \theta_j -> θ_j
+  processed = processed.replace(/\\theta_([a-zA-Z0-9])/g, "θ_$1");
+  processed = processed.replace(/\\theta_\{([^}]+)\}/g, "θ_($1)");
   
+  // Replace other common subscripts
+  processed = processed.replace(/_\{([^}]+)\}/g, "_($1)");
+
   const greekLetters: Record<string, string> = {
     '\\alpha': 'α',
     '\\beta': 'β',
@@ -104,11 +93,12 @@ function formatMessageContent(text: string): React.ReactNode {
   };
   
   for (const [latex, unicode] of Object.entries(greekLetters)) {
-    processed = processed.replace(new RegExp(`\\$?${latex.replace('\\', '\\\\')}\\$?`, 'g'), unicode);
+    processed = processed.replace(new RegExp(`\\\\?${latex.replace('\\', '\\\\')}`, 'g'), unicode);
   }
   
-  // General math formatting like $x$ -> x
-  processed = processed.replace(/\$([^$]+)\$/g, '$1');
+  // Remove standalone math mode wrapper signs $ ... $ or $$ ... $$
+  processed = processed.replace(/\$\$/g, "");
+  processed = processed.replace(/\$/g, "");
   
   // 2. Parse markdown formatting line-by-line
   const lines = processed.split("\n");
@@ -193,6 +183,7 @@ export default function ChatPage() {
   const [userInput, setUserInput] = useState("");
   const [geminiKey, setGeminiKey] = useState("");
   const [tenantId, setTenantId] = useState("");
+  const [graphView, setGraphView] = useState<"session" | "global">("session");
   const [isLoading, setIsLoading] = useState(false);
   const [isSyncingGraph, setIsSyncingGraph] = useState(false);
   
@@ -209,6 +200,11 @@ export default function ChatPage() {
   const recognitionRef = useRef<any>(null);
   const voiceStateRef = useRef<string>("inactive");
 
+  // Custom Cloned TTS Audio Player Refs
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+  const audioQueueRef = useRef<{ text: string; audio: HTMLAudioElement | null; url: string }[]>([]);
+  const isPlayingRef = useRef<boolean>(false);
+
   // Keep state sync ref for async timers/callbacks
   useEffect(() => {
     voiceStateRef.current = voiceState;
@@ -222,9 +218,13 @@ export default function ChatPage() {
     const savedKey = localStorage.getItem(KEY_LOCAL_STORAGE_GEMINI) || "";
     setGeminiKey(savedKey);
 
-    // Generate a fresh Tenant UUID for this page session to avoid stale memory across reloads/restarts
-    const freshTenant = crypto.randomUUID();
-    setTenantId(freshTenant);
+    // Load or generate Tenant UUID for persistent cross-reload learning memory
+    let savedTenant = localStorage.getItem(KEY_LOCAL_STORAGE_TENANT);
+    if (!savedTenant || savedTenant === "undefined") {
+      savedTenant = crypto.randomUUID();
+      localStorage.setItem(KEY_LOCAL_STORAGE_TENANT, savedTenant);
+    }
+    setTenantId(savedTenant);
 
     // Build default initial session
     const initialSessionId = crypto.randomUUID();
@@ -299,7 +299,7 @@ export default function ChatPage() {
     if (!recognitionRef.current) return;
     if (voiceState === "listening") {
       try {
-        window.speechSynthesis.cancel();
+        stopSpeaking();
         recognitionRef.current.start();
       } catch (e) {
         console.warn("Speech recognition starting warning:", e);
@@ -321,11 +321,12 @@ export default function ChatPage() {
   const activeSession = sessions.find((s) => s.id === activeSessionId) || null;
 
   // Sync graph manually
-  const handleSyncGraph = async () => {
+  const handleSyncGraph = async (viewOverride?: "session" | "global") => {
     if (!activeSession || isSyncingGraph) return;
     setIsSyncingGraph(true);
+    const viewToFetch = viewOverride || graphView;
     try {
-      const response = await fetch(`${API_BASE_URL}/graph/${activeSession.id}`, {
+      const response = await fetch(`http://127.0.0.1:8000/api/v1/chat/graph/${activeSession.id}?view=${viewToFetch}`, {
         headers: {
           "X-Gemini-Api-Key": geminiKey.trim() || "AIzaSy...",
           "X-Tenant-Id": tenantId
@@ -352,12 +353,19 @@ export default function ChatPage() {
     }
   };
 
+  // Automatically sync graph when session, view, or tenant changes
+  useEffect(() => {
+    if (activeSession?.id && tenantId) {
+      handleSyncGraph(graphView);
+    }
+  }, [activeSession?.id, graphView, tenantId]);
+
   const handleResetMemory = async () => {
     if (!window.confirm("Are you sure you want to reset your learning history? This will clear all extracted graph concepts and dialogue history in the database.")) {
       return;
     }
     try {
-      await fetch(`${API_BASE_URL}/clear`, {
+      await fetch("http://127.0.0.1:8000/api/v1/chat/clear", {
         method: "POST",
         headers: {
           "X-Gemini-Api-Key": geminiKey.trim() || "AIzaSy...",
@@ -369,6 +377,7 @@ export default function ChatPage() {
     }
 
     const freshTenant = crypto.randomUUID();
+    localStorage.setItem(KEY_LOCAL_STORAGE_TENANT, freshTenant);
     setTenantId(freshTenant);
 
     const newId = crypto.randomUUID();
@@ -440,14 +449,26 @@ export default function ChatPage() {
       }
     }
   };
+  // Cancel speech helper
+  const stopSpeaking = () => {
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause();
+      currentAudioRef.current = null;
+    }
+    audioQueueRef.current = [];
+    isPlayingRef.current = false;
+  };
 
   // Voice Speech (TTS)
   const speakText = (text: string, onSpeechFinished?: () => void) => {
     const isVoiceActive = voiceStateRef.current !== "inactive";
     if (!readAloudEnabled && !isVoiceActive) return;
-    if (typeof window === "undefined" || !window.speechSynthesis) return;
 
-    window.speechSynthesis.cancel(); // stop previous speech
+    // Stop any running speech first
+    stopSpeaking();
 
     // Clean formatting characters to ensure smooth speech flow
     let cleanText = text.replace(/[*#`_\-]/g, "").trim();
@@ -491,24 +512,70 @@ export default function ChatPage() {
       }
     }
 
-    const utterance = new SpeechSynthesisUtterance(cleanText);
-    utterance.rate = dynamicSpeed;
-    utterance.pitch = 1.0;
+    // Split text into sentences using lookbehind pattern
+    const rawSentences = cleanText.split(/(?<=[.!?])\s+/);
+    const sentences = rawSentences.map(s => s.trim()).filter(s => s.length > 0);
 
-    const voices = window.speechSynthesis.getVoices();
-    const standardVoice = voices.find((v) => v.lang.includes("en") && v.name.toLowerCase().includes("google"));
-    if (standardVoice) utterance.voice = standardVoice;
-
-    if (onSpeechFinished) {
-      utterance.onend = () => {
-        onSpeechFinished();
-      };
-      utterance.onerror = () => {
-        onSpeechFinished();
-      };
+    if (sentences.length === 0) {
+      if (onSpeechFinished) onSpeechFinished();
+      return;
     }
 
-    window.speechSynthesis.speak(utterance);
+    // Build audio queue items
+    const queue = sentences.map(s => {
+      const url = `http://127.0.0.1:8000/api/v1/chat/tts?text=${encodeURIComponent(s)}`;
+      return { text: s, audio: null as HTMLAudioElement | null, url };
+    });
+
+    audioQueueRef.current = queue;
+    isPlayingRef.current = true;
+
+    // Define function to play a specific queue item
+    const playQueueIndex = (index: number) => {
+      if (!isPlayingRef.current || index >= queue.length) {
+        isPlayingRef.current = false;
+        if (onSpeechFinished) onSpeechFinished();
+        return;
+      }
+
+      const item = queue[index];
+      let audio = item.audio;
+
+      if (!audio) {
+        audio = new Audio(item.url);
+        item.audio = audio;
+      }
+
+      audio.playbackRate = dynamicSpeed;
+      currentAudioRef.current = audio;
+
+      audio.onended = () => {
+        playQueueIndex(index + 1);
+      };
+
+      audio.onerror = (e) => {
+        console.error("Audio playback error for sentence:", item.text, e);
+        playQueueIndex(index + 1);
+      };
+
+      audio.play().catch(err => {
+        console.error("Failed to start audio playback:", err);
+        playQueueIndex(index + 1);
+      });
+
+      // Pre-fetch next item
+      if (index + 1 < queue.length) {
+        const nextItem = queue[index + 1];
+        if (!nextItem.audio) {
+          const nextAudio = new Audio(nextItem.url);
+          nextAudio.preload = "auto";
+          nextAudio.playbackRate = dynamicSpeed;
+          nextItem.audio = nextAudio;
+        }
+      }
+    };
+
+    playQueueIndex(0);
   };
 
   // Toggle STT recording
@@ -541,7 +608,7 @@ export default function ChatPage() {
     // Optional Persona prompts injection
     let payloadMessage = messageText;
     if (useCatchphrases) {
-      payloadMessage += "\n\n(Pedagogical context instruction: Keep your response concise, clear, and match the signature speaking style of Andrew Ng. Integrate minor expressions like 'Let us go step by step' or 'Don't worry if the math is a bit dense here'.)";
+      payloadMessage += "\n\n(Persona reminder: Do NOT open with any compliment about the question — no 'Great question', 'That's a thoughtful question', etc. Start with substance. Ground claims in retrieved sources when possible. Use Andrew's natural connectives: 'so', 'actually', 'right?', 'I think'. End with a concrete next step or a targeted comprehension check, never 'does that make sense?')";
     }
 
     const updatedMessages = [
@@ -567,7 +634,7 @@ export default function ChatPage() {
         content: m.content
       }));
 
-      const response = await fetch(`${API_BASE_URL}/message`, {
+      const response = await fetch("http://127.0.0.1:8000/api/v1/chat/message", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -632,7 +699,15 @@ export default function ChatPage() {
                     retrievedChunks: data.retrieved_chunks
                   }
                 ],
-                triplets: updatedTriplets
+                // Merge new graph nodes with existing (don't drop edges).
+                // The chat response only provides nodes — edges arrive
+                // via the delayed handleSyncGraph() calls at 5s/12s.
+                triplets: updatedTriplets.length > 0
+                  ? [...(s.triplets || []).filter(
+                      (existing) => !updatedTriplets.some((u) => u.node_id === existing.node_id)
+                    ), ...updatedTriplets]
+                  : s.triplets,
+                // Preserve existing edges — full sync will refresh them
               }
             : s
         )
@@ -772,7 +847,7 @@ export default function ChatPage() {
                 key={session.id}
                 onClick={() => {
                   setActiveSessionId(session.id);
-                  if (readAloudEnabled) window.speechSynthesis.cancel();
+                  stopSpeaking();
                 }}
                 className={`group px-3 py-2.5 rounded-lg cursor-pointer flex items-center justify-between transition ${
                   isActive ? "bg-[#E8EEFB] border border-[#E5E7EB] text-[#1A56DB]" : "hover:bg-[#F7F8FA] text-[#6B7280] hover:text-[#111827]"
@@ -814,7 +889,7 @@ export default function ChatPage() {
             <button
               onClick={() => {
                 setReadAloudEnabled(!readAloudEnabled);
-                if (readAloudEnabled) window.speechSynthesis.cancel();
+                stopSpeaking();
               }}
               className={`p-2 rounded-lg border transition ${
                 readAloudEnabled
@@ -952,20 +1027,47 @@ export default function ChatPage() {
           ────────────────────────────────────────────────── */}
       <div className="w-[480px] bg-white border border-[#E5E7EB] rounded-2xl shadow-sm flex flex-col overflow-hidden">
         
-        {/* Header with Sync buttons */}
-        <div className="p-4 border-b border-[#E5E7EB] flex items-center justify-between">
+        {/* Header with Sync buttons & View Toggle */}
+        <div className="p-4 border-b border-[#E5E7EB] flex items-center justify-between bg-white">
           <div className="flex items-center gap-2">
             <Cpu className="text-[#1A56DB] w-4 h-4" />
             <h2 className="text-[14px] font-medium text-[#111827]">Memory matrix</h2>
           </div>
-          <button
-            onClick={handleSyncGraph}
-            disabled={isSyncingGraph}
-            className="p-1.5 rounded-lg border border-[#E5E7EB] hover:bg-[#F7F8FA] text-[#6B7280] transition"
-            title="Refresh knowledge graph"
-          >
-            <RefreshCw className={`w-4 h-4 ${isSyncingGraph ? "animate-spin" : ""}`} />
-          </button>
+          
+          {/* Segment control toggle & Sync button */}
+          <div className="flex items-center gap-3">
+            <div className="flex bg-[#F3F4F6] p-0.5 rounded-lg border border-[#E5E7EB]">
+              <button
+                onClick={() => setGraphView("session")}
+                className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-all ${
+                  graphView === "session"
+                    ? "bg-white text-[#111827] shadow-sm"
+                    : "text-[#6B7280] hover:text-[#111827]"
+                }`}
+              >
+                Active Chat
+              </button>
+              <button
+                onClick={() => setGraphView("global")}
+                className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-all ${
+                  graphView === "global"
+                    ? "bg-white text-[#111827] shadow-sm"
+                    : "text-[#6B7280] hover:text-[#111827]"
+                }`}
+              >
+                Global Map
+              </button>
+            </div>
+            
+            <button
+              onClick={() => handleSyncGraph(graphView)}
+              disabled={isSyncingGraph}
+              className="p-1.5 rounded-lg border border-[#E5E7EB] hover:bg-[#F7F8FA] text-[#6B7280] transition"
+              title="Refresh knowledge graph"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isSyncingGraph ? "animate-spin" : ""}`} />
+            </button>
+          </div>
         </div>
 
         {/* Network visualizer graph */}
@@ -995,7 +1097,7 @@ export default function ChatPage() {
             {/* Sleek Ghost Close Button inside card top-right */}
             <button
               onClick={() => {
-                window.speechSynthesis.cancel();
+                stopSpeaking();
                 setVoiceState("inactive");
               }}
               className="absolute top-4 right-4 w-7 h-7 flex items-center justify-center rounded-full border border-slate-200 hover:bg-slate-100 text-slate-500 hover:text-slate-700 transition cursor-pointer"
@@ -1025,7 +1127,7 @@ export default function ChatPage() {
             <button
               onClick={() => {
                 if (voiceState === "speaking") {
-                  window.speechSynthesis.cancel();
+                  stopSpeaking();
                   setVoiceState("listening");
                 } else if (voiceState === "listening") {
                   setVoiceState("inactive");

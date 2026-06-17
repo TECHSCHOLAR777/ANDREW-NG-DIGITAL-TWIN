@@ -84,42 +84,20 @@ def chunk_text(text: str, target_len: int = 1000) -> list[str]:
 
     return chunks
 
-# ── Fetch Embeddings using Hugging Face Serverless Inference API ──────────────
+_local_model = None
+
+# ── Fetch Embeddings locally using sentence-transformers ──────────────────────
 def get_embeddings_local(texts: list[str]) -> list[list[float]]:
     if not texts:
         return []
-    import requests
-    import time
+    from sentence_transformers import SentenceTransformer
+    global _local_model
+    if "_local_model" not in globals():
+        logger.info("Loading local SentenceTransformer model 'all-mpnet-base-v2'...")
+        globals()["_local_model"] = SentenceTransformer("all-mpnet-base-v2")
     
-    hf_token = os.environ.get("HF_TOKEN")
-    model_id = "sentence-transformers/all-mpnet-base-v2"
-    api_url = f"https://api-inference.huggingface.co/models/{model_id}"
-    
-    headers = {"Authorization": f"Bearer {hf_token}"} if hf_token else {}
-    payload = {"inputs": texts}
-    
-    for attempt in range(5):
-        try:
-            resp = requests.post(api_url, headers=headers, json=payload, timeout=60)
-            if resp.status_code == 200:
-                val = resp.json()
-                # Ensure it returned a list of lists of floats
-                if isinstance(val, list):
-                    return [[float(x) for x in v] if isinstance(v, list) else [float(x) for x in val] for v in val]
-            elif resp.status_code == 503:
-                # Model is warming up on HF serverless
-                logger.warning("Hugging Face model is loading. Retrying in 10s (attempt %d/5)...", attempt+1)
-                time.sleep(10)
-                continue
-            else:
-                raise Exception(f"Hugging Face API returned status {resp.status_code}: {resp.text}")
-        except Exception as e:
-            logger.error("Hugging Face API call failed: %s", e)
-            if attempt == 4:
-                raise
-        time.sleep(3)
-        
-    raise Exception("Failed to retrieve embeddings from Hugging Face.")
+    model = globals()["_local_model"]
+    return model.encode(texts, show_progress_bar=True, batch_size=128).tolist()
 
 # ── Main Ingestion Runner ─────────────────────────────────────────────────────
 async def main():
@@ -134,7 +112,7 @@ async def main():
 
     # Connect briefly to fetch tenant_id and pre-cache existing database files
     logger.info("Connecting to Supabase to fetch initial metadata...")
-    conn = await asyncpg.connect(dsn=db_url, statement_cache_size=0)
+    conn = await asyncpg.connect(dsn=db_url)
 
     # 1. Ensure a default tenant exists
     tenant_id = await conn.fetchval(
@@ -201,7 +179,7 @@ async def main():
         elif db_chunk_count > 0:
             # Partially ingested, delete so we can clean-ingest it
             logger.info("Partial upload detected for %s (%d/%d chunks). Resetting...", source_file, db_chunk_count, len(chunks))
-            conn = await asyncpg.connect(dsn=db_url, statement_cache_size=0)
+            conn = await asyncpg.connect(dsn=db_url)
             await conn.execute(
                 "DELETE FROM knowledge_chunks WHERE tenant_id = $1 AND source_file = $2",
                 tenant_id,
@@ -246,7 +224,7 @@ async def main():
 
         # 3b. Open DB connection briefly for bulk insert
         logger.info("Connecting to Supabase to insert batch %d/%d...", batch_num, total_batches)
-        conn = await asyncpg.connect(dsn=db_url, statement_cache_size=0)
+        conn = await asyncpg.connect(dsn=db_url)
         
         insert_data = [
             (

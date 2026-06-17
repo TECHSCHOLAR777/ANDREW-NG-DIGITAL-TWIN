@@ -23,7 +23,7 @@ When you chat with the twin:
 *   **Reciprocal Rank Fusion (RRF):** Merges the semantic and keyword search ranks, applying a prior multiplier to prioritize lecture notes over newsletters or raw transcripts.
 *   **Recursive Graph Traversal:** Uses a recursive 2-hop database query to pull active memory nodes and edges, applying graph weight decay as distance increases.
 *   **Background Triplet Extraction:** Spawns non-blocking async tasks in FastAPI to parse dialogue, extract relation triplets, and upsert them using trigram fuzzy matching to avoid duplicate concepts (like resolving "backprop" to "Backpropagation").
-*   **Offloaded Embeddings:** Offloads embedding generation to Hugging Face Serverless Inference API, keeping RAM usage under 100MB to run within Render's 512MB free tier.
+*   **Fast startup:** Preloads the local sentence-transformer embedding model on FastAPI start so the first query does not suffer from cold-start latency.
 
 ---
 
@@ -32,7 +32,7 @@ When you chat with the twin:
 ```
 ├── backend/
 │   ├── app/
-│   │   ├── main.py              # FastAPI server entrypoint (lifespan hook, DB pool setup)
+│   │   ├── main.py              # FastAPI server entrypoint (lifespan hook, DB pool, model preloading)
 │   │   ├── routers/
 │   │   │   └── chat.py          # /message, /graph, and /clear endpoints
 │   │   └── services/
@@ -69,7 +69,6 @@ You need to set up two environment variables in a `.env` file in the root direct
 ```env
 DATABASE_URL=postgresql+asyncpg://postgres:your_password@db.your_supabase_project.supabase.co:5432/postgres
 GEMINI_API_KEY=your_gemini_api_key_here
-HF_TOKEN=your_hugging_face_token_here (Optional: for higher rate limits on embeddings)
 ```
 
 ### Database Setup
@@ -97,7 +96,7 @@ Execute the migration scripts in the following order against your PostgreSQL ins
     ```bash
     python -m uvicorn backend.app.main:app --reload
     ```
-    The server will startup and run on `http://127.0.0.1:8000`.
+    The server will startup, preload the SentenceTransformer model, and run on `http://127.0.0.1:8000`.
 
 ### 2. Frontend Setup
 1.  Navigate to the frontend folder:

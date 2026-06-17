@@ -25,8 +25,6 @@ import json
 import logging
 import re
 import uuid
-import os
-import httpx
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -56,6 +54,8 @@ VALID_PREDICATES: set[str] = {
     "has_prerequisite",
     "related_to",
     "used_in",
+    "named",
+    "is",
 }
 
 VALID_NODE_TYPES: set[str] = {
@@ -99,12 +99,22 @@ You are a knowledge-graph extraction engine. Your job is to extract structured
 tutor (Andrew Ng) and a student.
 
 RULES:
-1. Only extract triples that involve the STUDENT's knowledge state—what they
-   know, struggle with, are curious about, or are working on.
+1. Only extract triples that involve the STUDENT's knowledge state—what they know, struggle with, are curious about, or are working on.
 2. Subject is almost always the student or a concept.
-3. Use ONLY these predicates:
-   struggles_with, mastered, curious_about, works_in, studied, applied,
-   confused_about, wants_to_learn, has_prerequisite, related_to, used_in
+3. Use ONLY these predicates and respect their directional mapping:
+   - struggles_with: [Student] -[struggles_with]-> [Concept] (e.g. Student struggles with Backpropagation)
+   - mastered: [Student] -[mastered]-> [Concept]
+   - curious_about: [Student] -[curious_about]-> [Concept/Project/Tool/Paper]
+   - works_in: [Student] -[works_in]-> [Concept/Project] (e.g. Student works in Retail Industry)
+   - studied: [Student] -[studied]-> [Concept/Paper]
+   - applied: [Student] -[applied]-> [Concept/Tool/Project] (e.g. Student applied Linear Regression)
+   - confused_about: [Student] -[confused_about]-> [Concept]
+   - wants_to_learn: [Student] -[wants_to_learn]-> [Concept]
+   - has_prerequisite: [Concept] -[has_prerequisite]-> [Concept] (e.g. Deep Learning has_prerequisite Linear Algebra)
+   - related_to: [Concept] -[related_to]-> [Concept]
+   - used_in: [Concept/Tool] -[used_in]-> [Project/Concept] (e.g. Machine Learning -[used_in]-> Customer Support Routing. The subject is ALWAYS the tool or concept used, and the object is the application or project where it is used. Do NOT reverse this direction.)
+   - named: [Student] -[named]-> [Name (raw_name of the student)]
+   - is: [Student] -[is]-> [Role/Attribute] (e.g. Student -[is]-> Product Manager)
 4. For each entity, provide:
    - raw_name: exactly as it appeared in conversation
    - canonical_name: the standard, canonical name (e.g. "NNs" → "Neural Networks")
@@ -130,45 +140,24 @@ OUTPUT FORMAT (strict JSON array):
 """.strip()
 
 
-HF_TOKEN = os.getenv("HF_TOKEN")
-HF_MODEL_ID = os.getenv("HF_MODEL_ID", "sentence-transformers/all-mpnet-base-v2")
-HF_API_URL = os.getenv("HF_API_URL", f"https://api-inference.huggingface.co/models/{HF_MODEL_ID}")
+_local_embed_model = None
 
-# Sanitize to ensure the URL has a protocol prefix
-if HF_API_URL and not HF_API_URL.startswith("http"):
-    HF_API_URL = f"https://{HF_API_URL}"
+def _get_local_embed_model():
+    global _local_embed_model
+    if _local_embed_model is None:
+        from sentence_transformers import SentenceTransformer
+        _local_embed_model = SentenceTransformer("all-mpnet-base-v2")
+    return _local_embed_model
 
 async def _compute_embedding(text: str) -> list[float]:
-    """Compute a 768-dim embedding using Hugging Face Serverless Inference API."""
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
-    payload = {"inputs": text}
-    
-    # Try up to 5 times (helps when Hugging Face is loading/warming up the model on demand)
-    for attempt in range(5):
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(HF_API_URL, headers=headers, json=payload)
-                if response.status_code == 200:
-                    val = response.json()
-                    # HF can return nested lists or flat list of floats
-                    if isinstance(val, list):
-                        if len(val) > 0 and isinstance(val[0], list):
-                            return [float(x) for x in val[0]]
-                        return [float(x) for x in val]
-                elif response.status_code == 503:
-                    # Model loading, wait and retry
-                    logger.warning("Hugging Face model is loading/warming up. Retrying in 5s (attempt %d/5)...", attempt+1)
-                    await asyncio.sleep(5)
-                    continue
-                else:
-                    logger.error("Hugging Face Inference API error %d: %s", response.status_code, response.text)
-        except Exception as e:
-            logger.error("Error connecting to Hugging Face Inference API: %s", e)
-            if attempt == 4:
-                raise
-        await asyncio.sleep(2)
-        
-    raise Exception("Failed to retrieve embeddings from Hugging Face Serverless Inference API after multiple attempts.")
+    """Compute a 768-dim embedding locally using sentence-transformers."""
+    loop = asyncio.get_event_loop()
+    model = _get_local_embed_model()
+    result = await loop.run_in_executor(
+        None,
+        lambda: model.encode(text).tolist()
+    )
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -203,7 +192,8 @@ class TripletExtractor:
             model_name=gemini_model,
             generation_config=genai.GenerationConfig(
                 temperature=0.1,           # deterministic extraction
-                max_output_tokens=2048,
+                max_output_tokens=8192,    # Gemini 2.5 Flash thinking tokens
+                                           # count against this budget
             ),
             system_instruction=TRIPLET_EXTRACTION_SYSTEM_PROMPT,
         )
@@ -217,6 +207,7 @@ class TripletExtractor:
         turn_id: uuid.UUID,
         user_content: str,
         assistant_content: str,
+        session_id: uuid.UUID,
         student_canonical: str = "Student",
     ) -> None:
         """
@@ -227,7 +218,7 @@ class TripletExtractor:
           4. Upsert relation_edges into the graph.
           5. Mark the conversation_turn as processed.
         """
-        logger.info("TripletExtractor: processing turn %s for tenant %s", turn_id, tenant_id)
+        logger.info("TripletExtractor: processing turn %s for tenant %s (session %s)", turn_id, tenant_id, session_id)
 
         try:
             # Step 1: Extract triplets from Gemini
@@ -245,7 +236,7 @@ class TripletExtractor:
 
             # Step 3 & 4: Upsert to DB in a single transaction
             resolved = await self._resolve_and_upsert(
-                tenant_id, turn_id, valid_triplets, student_canonical
+                tenant_id, turn_id, session_id, valid_triplets, student_canonical
             )
 
             logger.info(
@@ -322,18 +313,22 @@ class TripletExtractor:
     # STEP 2: VALIDATION
     # ─────────────────────────────────────────────────────────────────────────
     def _validate_triplets(self, triplets: list[RawTriplet]) -> list[RawTriplet]:
-        """Filter triplets to only those with valid predicates and node types."""
+        """Filter triplets with invalid predicates and normalize node types."""
         valid = []
         for t in triplets:
             if t.predicate not in VALID_PREDICATES:
                 logger.debug("Rejecting invalid predicate '%s'", t.predicate)
                 continue
+            # Normalize non-standard node types to "Concept" instead of
+            # dropping the whole triplet. The LLM sometimes returns types
+            # like "Role", "Attribute", "Industry" which are semantically
+            # fine but not in our closed-world set.
             if t.subject_type not in VALID_NODE_TYPES:
-                logger.debug("Rejecting invalid subject_type '%s'", t.subject_type)
-                continue
+                logger.debug("Normalizing subject_type '%s' → 'Concept'", t.subject_type)
+                t.subject_type = "Concept"
             if t.object_type not in VALID_NODE_TYPES:
-                logger.debug("Rejecting invalid object_type '%s'", t.object_type)
-                continue
+                logger.debug("Normalizing object_type '%s' → 'Concept'", t.object_type)
+                t.object_type = "Concept"
             if t.confidence < 0.5:
                 logger.debug("Skipping low-confidence triplet (%.2f)", t.confidence)
                 continue
@@ -347,16 +342,49 @@ class TripletExtractor:
         self,
         tenant_id: uuid.UUID,
         turn_id: uuid.UUID,
+        session_id: uuid.UUID,
         triplets: list[RawTriplet],
         student_canonical: str,
     ) -> list[ResolvedTriplet]:
         """
         For each triplet:
-          1. Upsert subject and object via upsert_entity() SQL function.
-             This handles entity resolution (alias mapping) natively in PG.
-          2. Insert or merge the relation_edge (by weight accumulation).
+          1. Collect all unique canonical names and retrieve or compute their embeddings upfront.
+          2. Open transaction and upsert subject and object via upsert_entity() SQL function.
+          3. Fast-update embeddings from pre-computed values without awaiting CPU/network logic.
+          4. Insert or merge the relation_edge (by weight accumulation).
         """
         resolved: list[ResolvedTriplet] = []
+
+        # Collect unique canonical names
+        unique_canonical_names = set()
+        for t in triplets:
+            if t.canonical_subj:
+                unique_canonical_names.add(t.canonical_subj)
+            if t.canonical_obj:
+                unique_canonical_names.add(t.canonical_obj)
+
+        existing_embeddings = {}
+        if unique_canonical_names:
+            async with self.db.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT canonical_name, embedding
+                    FROM entity_nodes
+                    WHERE tenant_id = $1 AND canonical_name = ANY($2::text[]) AND embedding IS NOT NULL
+                    """,
+                    tenant_id,
+                    list(unique_canonical_names)
+                )
+                for r in rows:
+                    existing_embeddings[r["canonical_name"]] = r["embedding"]
+
+        # Compute embeddings upfront for any missing ones
+        missing_names = [name for name in unique_canonical_names if name and name.strip() and name not in existing_embeddings]
+        if missing_names:
+            logger.info("Computing embeddings upfront for %d missing entities", len(missing_names))
+            embeddings_list = await asyncio.gather(*[_compute_embedding(name) for name in missing_names])
+            for name, emb in zip(missing_names, embeddings_list):
+                existing_embeddings[name] = emb
 
         async with self.db.acquire() as conn:
             async with conn.transaction():
@@ -389,16 +417,15 @@ class TripletExtractor:
                         logger.warning("Failed to resolve entities for triplet: %s", t)
                         continue
 
-                    # ── Compute node embeddings if missing ───────────────────
+                    # ── Update node embeddings if missing (fast database update) ──
                     subj_missing = await conn.fetchval(
                         "SELECT id FROM entity_nodes WHERE id = $1 AND embedding IS NULL",
                         subj_id
                     )
-                    if subj_missing:
-                        subj_emb = await _compute_embedding(t.canonical_subj)
+                    if subj_missing and t.canonical_subj in existing_embeddings:
                         await conn.execute(
                             "UPDATE entity_nodes SET embedding = $1::vector WHERE id = $2",
-                            subj_emb,
+                            existing_embeddings[t.canonical_subj],
                             subj_id
                         )
 
@@ -407,24 +434,23 @@ class TripletExtractor:
                         "SELECT id FROM entity_nodes WHERE id = $1 AND embedding IS NULL",
                         obj_id
                     )
-                    if obj_missing:
-                        obj_emb = await _compute_embedding(t.canonical_obj)
+                    if obj_missing and t.canonical_obj in existing_embeddings:
                         await conn.execute(
                             "UPDATE entity_nodes SET embedding = $1::vector WHERE id = $2",
-                            obj_emb,
+                            existing_embeddings[t.canonical_obj],
                             obj_id
                         )
 
                     # ── Upsert RELATION EDGE ────────────────────────────────
-                    # If this (subject, predicate, object) edge already exists,
+                    # If this (subject, predicate, object) edge already exists in the session,
                     # accumulate weight (repeated observations strengthen edge).
                     await conn.execute(
                         """
                         INSERT INTO relation_edges
-                            (tenant_id, subject_id, predicate, object_id,
+                            (tenant_id, session_id, subject_id, predicate, object_id,
                              weight, source_turn_id, evidence)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7)
-                        ON CONFLICT (tenant_id, subject_id, predicate, object_id)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                        ON CONFLICT (tenant_id, session_id, subject_id, predicate, object_id)
                         DO UPDATE SET
                             weight         = LEAST(
                                 relation_edges.weight + EXCLUDED.weight * 0.1,
@@ -435,6 +461,7 @@ class TripletExtractor:
                             updated_at     = NOW()
                         """,
                         tenant_id,
+                        session_id,
                         subj_id,
                         t.predicate,
                         obj_id,
@@ -468,11 +495,3 @@ class TripletExtractor:
                 """,
                 turn_id,
             )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# RELATION EDGE UNIQUE CONSTRAINT (add to migration 001 if not already present)
-# ─────────────────────────────────────────────────────────────────────────────
-# ALTER TABLE relation_edges
-# ADD CONSTRAINT uq_relation_edges_spo
-# UNIQUE (tenant_id, subject_id, predicate, object_id);
