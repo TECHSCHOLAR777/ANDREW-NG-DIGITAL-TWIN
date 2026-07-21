@@ -37,9 +37,14 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage the asyncpg connection pool lifecycle."""
-    db_url = os.environ["DATABASE_URL"].replace(
-        "postgresql+asyncpg://", "postgresql://"
-    )
+    db_url_raw = os.environ.get("DATABASE_URL")
+    if not db_url_raw:
+        raise RuntimeError(
+            "DATABASE_URL is not set. Create a .env file with your Supabase "
+            "Postgres connection string, e.g. "
+            "DATABASE_URL=postgresql://postgres:<password>@db.<project>.supabase.co:5432/postgres"
+        )
+    db_url = db_url_raw.replace("postgresql+asyncpg://", "postgresql://")
     # Retry DB connection up to 3 times (handles transient IPv6 routing issues)
     max_retries = 3
     for attempt in range(1, max_retries + 1):
@@ -84,18 +89,32 @@ async def _register_vector_codec(conn: asyncpg.Connection) -> None:
         format  = "text",
     )
 
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development").lower()
+cors_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ALLOW_ORIGINS",
+        "http://localhost:3000,http://127.0.0.1:3000",
+    ).split(",")
+    if origin.strip()
+]
+
 
 app = FastAPI(
     title    = "Andrew Ng Digital Twin API",
     version  = "2.0.0",
     lifespan = lifespan,
+    docs_url = None if ENVIRONMENT == "production" else "/docs",
+    redoc_url = None if ENVIRONMENT == "production" else "/redoc",
 )
 
 # CORS — adjust origins for production
 app.add_middleware(
     CORSMiddleware,
-    allow_origins     = ["http://localhost:3000", "http://127.0.0.1:3000", "https://your-domain.com"],
-    allow_credentials = True,
+    allow_origins     = cors_origins,
+    # No cookies are used anywhere (auth is header-based), so credentialed
+    # CORS would only widen what a malicious origin can do. Keep it off.
+    allow_credentials = False,
     allow_methods     = ["*"],
     allow_headers     = ["*"],
 )

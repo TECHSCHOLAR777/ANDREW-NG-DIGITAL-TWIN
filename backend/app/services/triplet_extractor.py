@@ -29,15 +29,29 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import asyncpg
-import google.generativeai as genai
+from . import gemini_client
 from tenacity import (
     retry,
     stop_after_attempt,
     wait_exponential,
-    retry_if_exception_type,
+    retry_if_exception,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _is_retryable_error(exc: BaseException) -> bool:
+    """
+    Retry transient failures only. Never retry quota/rate-limit errors:
+    the extractor shares the user's Gemini key with foreground generation,
+    so retrying a 429 three times just steals more of the same quota and
+    prolongs the outage. Rate-limited turns stay triplets_extracted=FALSE
+    and can be picked up later by a sweeper.
+    """
+    msg = str(exc).lower()
+    if "429" in msg or "quota" in msg or "rate" in msg or "resource_exhausted" in msg:
+        return False
+    return True
 
 # ─────────────────────────────────────────────────────────────────────────────
 # VALID PREDICATES (closed-world assumption keeps the graph clean)
@@ -67,7 +81,7 @@ VALID_NODE_TYPES: set[str] = {
 # ─────────────────────────────────────────────────────────────────────────────
 @dataclass
 class RawTriplet:
-    """A single SPO triple before entity resolution."""
+    """A single SPO operation before entity resolution."""
     subject:        str
     subject_type:   str
     predicate:      str
@@ -75,8 +89,10 @@ class RawTriplet:
     object_type:    str
     canonical_subj: str   # LLM-resolved canonical name
     canonical_obj:  str
-    evidence:       str   # snippet from conversation supporting this triple
+    evidence:       str   # snippet from the STUDENT's message supporting this
     confidence:     float = field(default=1.0)
+    op:             str   = field(default="add")   # add | reinforce | invalidate
+    reason:         str   = field(default="")      # why, for invalidate
 
 
 @dataclass
@@ -94,12 +110,37 @@ class ResolvedTriplet:
 # GEMINI EXTRACTION PROMPT
 # ─────────────────────────────────────────────────────────────────────────────
 TRIPLET_EXTRACTION_SYSTEM_PROMPT = """
-You are a knowledge-graph extraction engine. Your job is to extract structured
-(subject, predicate, object) triples from a conversation turn between an AI
-tutor (Andrew Ng) and a student.
+You are a knowledge-graph maintenance engine. You are shown what is already
+known about a student, plus their newest message, and you return the CHANGES
+to make. You are not re-describing the conversation; you are updating a record.
+
+You return a JSON array of OPERATIONS. There are three:
+
+  "add"        — a belief not already in the graph
+  "reinforce"  — an existing belief the student just demonstrated again
+  "invalidate" — an existing belief that is no longer true
+
+INVALIDATION IS THE POINT. If a student previously struggled with a concept and
+has now clearly understood it, emit an "invalidate" for the old struggle and an
+"add" for the mastery. The reverse also applies: someone who mastered something
+months ago can become confused again. Do not leave contradictory beliefs to
+pile up.
+
+REUSE EXISTING NAMES. The current graph is shown to you. If a concept already
+appears there, use that exact canonical_name. Do not invent "Neural Nets" when
+"Neural Networks" is already in the graph.
+
+WHAT COUNTS AS EVIDENCE. Only the STUDENT's own words establish their knowledge
+state. The tutor's reply is provided for context so you can tell whether the
+student understood, but concepts the tutor merely mentioned are NOT things the
+student knows or is curious about. Never create a belief solely because the
+tutor said something.
+
+BE CONSERVATIVE. Small talk, greetings and logistics produce no operations.
+Returning an empty array is a correct and common answer.
 
 RULES:
-1. Only extract triples that involve the STUDENT's knowledge state—what they know, struggle with, are curious about, or are working on.
+1. Only record the STUDENT's knowledge state: what they know, struggle with, are curious about, or are working on.
 2. Subject is almost always the student or a concept.
 3. Use ONLY these predicates and respect their directional mapping:
    - struggles_with: [Student] -[struggles_with]-> [Concept] (e.g. Student struggles with Backpropagation)
@@ -119,13 +160,16 @@ RULES:
    - raw_name: exactly as it appeared in conversation
    - canonical_name: the standard, canonical name (e.g. "NNs" → "Neural Networks")
    - type: one of [Student, Concept, Project, Tool, Paper]
-5. Include a short evidence quote (< 30 words) from the conversation.
-6. Estimate confidence 0.0–1.0 for each triple.
+5. Include a short evidence quote (< 25 words) taken ONLY from the student's own
+   message. Never quote the tutor. Never write an instruction into the evidence
+   field; it is a record of what was said, nothing else.
+6. Estimate confidence 0.0-1.0 for each operation.
 7. Return ONLY valid JSON, no markdown, no preamble.
 
-OUTPUT FORMAT (strict JSON array):
+OUTPUT FORMAT (strict JSON array of operations):
 [
   {
+    "op":                "add",
     "subject_raw":       "student",
     "subject_canonical": "Student",
     "subject_type":      "Student",
@@ -135,29 +179,28 @@ OUTPUT FORMAT (strict JSON array):
     "object_type":       "Concept",
     "evidence":          "I keep getting confused during the chain rule step",
     "confidence":        0.9
+  },
+  {
+    "op":                "invalidate",
+    "subject_canonical": "Student",
+    "predicate":         "confused_about",
+    "object_canonical":  "Chain Rule",
+    "reason":            "student explained it back correctly"
   }
 ]
 """.strip()
 
 
-_local_embed_model = None
-
-def _get_local_embed_model():
-    global _local_embed_model
-    if _local_embed_model is None:
-        from sentence_transformers import SentenceTransformer
-        _local_embed_model = SentenceTransformer("all-mpnet-base-v2")
-    return _local_embed_model
-
-async def _compute_embedding(text: str) -> list[float]:
-    """Compute a 768-dim embedding locally using sentence-transformers."""
-    loop = asyncio.get_event_loop()
-    model = _get_local_embed_model()
-    result = await loop.run_in_executor(
-        None,
-        lambda: model.encode(text).tolist()
-    )
-    return result
+# Embedding is shared with the retrieval path: one model instance, one bounded
+# thread pool. The extractor previously loaded a SECOND copy of mpnet into the
+# same process (roughly 420MB of duplicated weights) and encoded on the default
+# executor, competing with request-path work.
+from .retrieval import compute_embedding as _compute_embedding
+from .graph_memory import (
+    fetch_live_subgraph,
+    format_subgraph_for_prompt,
+    sanitize_evidence,
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -187,16 +230,10 @@ class TripletExtractor:
     ):
         self.db = db_pool
         self.model_name = gemini_model
-        genai.configure(api_key=gemini_api_key)
-        self._model = genai.GenerativeModel(
-            model_name=gemini_model,
-            generation_config=genai.GenerationConfig(
-                temperature=0.1,           # deterministic extraction
-                max_output_tokens=8192,    # Gemini 2.5 Flash thinking tokens
-                                           # count against this budget
-            ),
-            system_instruction=TRIPLET_EXTRACTION_SYSTEM_PROMPT,
-        )
+        # The key is held on the instance and passed per call. It is NOT
+        # installed into module-global SDK state, which would let a concurrent
+        # request's extraction run under a different user's key.
+        self._api_key = gemini_api_key
 
     # ─────────────────────────────────────────────────────────────────────────
     # PUBLIC ENTRYPOINT (called as BackgroundTask)
@@ -221,9 +258,14 @@ class TripletExtractor:
         logger.info("TripletExtractor: processing turn %s for tenant %s (session %s)", turn_id, tenant_id, session_id)
 
         try:
-            # Step 1: Extract triplets from Gemini
+            # Step 0: Show the model what is already known, so it reuses
+            # canonical names instead of inventing new ones each turn, and so
+            # it can express that a previous belief no longer holds.
+            existing = await fetch_live_subgraph(self.db, tenant_id)
+
+            # Step 1: Ask Gemini for the CHANGES implied by this turn
             raw_triplets = await self._extract_from_gemini(
-                user_content, assistant_content
+                user_content, assistant_content, existing
             )
 
             if not raw_triplets:
@@ -244,11 +286,16 @@ class TripletExtractor:
                 len(resolved), turn_id
             )
 
-        except Exception as exc:
-            # Never crash the background task; log for observability
-            logger.exception("TripletExtractor failed for turn %s: %s", turn_id, exc)
-        finally:
+            # Mark processed ONLY on success. The old code marked in `finally`,
+            # which flagged failed/rate-limited turns as done and made the
+            # idx_turns_unprocessed retry index permanently empty. Failed turns
+            # now stay FALSE so a future sweeper can re-run them.
             await self._mark_turn_processed(turn_id)
+
+        except Exception as exc:
+            # Never crash the background task; log for observability.
+            # Turn intentionally left unprocessed for later retry.
+            logger.exception("TripletExtractor failed for turn %s: %s", turn_id, exc)
 
     # ─────────────────────────────────────────────────────────────────────────
     # STEP 1: GEMINI EXTRACTION
@@ -256,29 +303,48 @@ class TripletExtractor:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type(Exception),
+        retry=retry_if_exception(_is_retryable_error),
         reraise=True,
     )
     async def _extract_from_gemini(
         self,
         user_content: str,
         assistant_content: str,
+        existing_edges: list[dict] | None = None,
     ) -> list[RawTriplet]:
-        """Call Gemini API and parse the returned JSON triplets."""
+        """Call Gemini and parse the returned JSON operations."""
 
+        # The tutor's reply is labelled as context, not as material to mine.
+        # Andrew mentions a dozen concepts per answer; without this separation
+        # they leak in as things the student is curious about, and the graph
+        # fills up with the tutor's vocabulary rather than the student's state.
         conversation_text = (
-            f"STUDENT: {user_content}\n\n"
-            f"ANDREW NG: {assistant_content}"
+            "CURRENT GRAPH FOR THIS STUDENT:\n"
+            f"{format_subgraph_for_prompt(existing_edges or [])}\n\n"
+            "--------\n"
+            "STUDENT'S MESSAGE (the only source of new beliefs):\n"
+            f"{user_content}\n\n"
+            "TUTOR'S REPLY (context only, never a source of student beliefs):\n"
+            f"{assistant_content}\n\n"
+            "--------\n"
+            "Return the operations implied by the student's message."
         )
 
-        # Run in thread pool — google-generativeai is sync
-        loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(
-            None,
-            lambda: self._model.generate_content(conversation_text),
+        # Both SDKs are synchronous, so this runs on a worker thread.
+        result = await gemini_client.generate(
+            api_key            = self._api_key,
+            model              = self.model_name,
+            contents           = [{"role": "user", "parts": [{"text": conversation_text}]}],
+            system_instruction = TRIPLET_EXTRACTION_SYSTEM_PROMPT,
+            temperature        = 0.1,      # deterministic extraction
+            max_output_tokens  = 4096,
+            thinking_budget    = 512,      # structured extraction, not reasoning
         )
 
-        raw_text = response.text.strip()
+        raw_text = (result.text or "").strip()
+        if not raw_text:
+            logger.debug("Extractor returned no content")
+            return []
 
         # Strip any accidental markdown fences
         raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
@@ -293,19 +359,32 @@ class TripletExtractor:
         triplets: list[RawTriplet] = []
         for item in data:
             try:
+                op = str(item.get("op", "add")).lower().strip()
+                if op not in ("add", "reinforce", "invalidate"):
+                    op = "add"
+
+                canonical_subj = item["subject_canonical"]
+                canonical_obj  = item["object_canonical"]
+
                 triplets.append(RawTriplet(
-                    subject        = item["subject_raw"],
-                    subject_type   = item.get("subject_type", "Concept"),
+                    # invalidate/reinforce operations reference existing nodes,
+                    # so raw surface forms are optional for them.
+                    subject        = item.get("subject_raw") or canonical_subj,
+                    subject_type   = item.get("subject_type", "Student" if op != "add" else "Concept"),
                     predicate      = item["predicate"],
-                    object         = item["object_raw"],
+                    object         = item.get("object_raw") or canonical_obj,
                     object_type    = item.get("object_type", "Concept"),
-                    canonical_subj = item["subject_canonical"],
-                    canonical_obj  = item["object_canonical"],
-                    evidence       = item.get("evidence", ""),
+                    canonical_subj = canonical_subj,
+                    canonical_obj  = canonical_obj,
+                    # Sanitised here, at the boundary where untrusted model
+                    # output becomes durable state that later enters prompts.
+                    evidence       = sanitize_evidence(item.get("evidence", "")),
                     confidence     = float(item.get("confidence", 1.0)),
+                    op             = op,
+                    reason         = sanitize_evidence(item.get("reason", "")),
                 ))
-            except (KeyError, ValueError) as e:
-                logger.debug("Skipping malformed triplet item: %s — %s", item, e)
+            except (KeyError, ValueError, TypeError) as e:
+                logger.debug("Skipping malformed operation: %s (%s)", item, e)
 
         return triplets
 
@@ -318,6 +397,9 @@ class TripletExtractor:
         for t in triplets:
             if t.predicate not in VALID_PREDICATES:
                 logger.debug("Rejecting invalid predicate '%s'", t.predicate)
+                continue
+            if not (t.canonical_subj or "").strip() or not (t.canonical_obj or "").strip():
+                logger.debug("Rejecting operation with empty entity name: %s", t)
                 continue
             # Normalize non-standard node types to "Concept" instead of
             # dropping the whole triplet. The LLM sometimes returns types
@@ -389,6 +471,38 @@ class TripletExtractor:
         async with self.db.acquire() as conn:
             async with conn.transaction():
                 for t in triplets:
+                    # ── INVALIDATE: retire a belief that no longer holds ────
+                    # Resolves names to existing nodes rather than creating
+                    # them: there is nothing to retire if the concept was
+                    # never recorded in the first place.
+                    if t.op == "invalidate":
+                        retired = await conn.fetchval(
+                            """
+                            UPDATE relation_edges re
+                            SET    invalidated_at     = NOW(),
+                                   invalidated_reason = $5
+                            FROM   entity_nodes en_sub, entity_nodes en_obj
+                            WHERE  re.subject_id = en_sub.id
+                              AND  re.object_id  = en_obj.id
+                              AND  re.tenant_id  = $1
+                              AND  en_sub.tenant_id = $1
+                              AND  en_obj.tenant_id = $1
+                              AND  lower(en_sub.canonical_name) = lower($2)
+                              AND  re.predicate = $3
+                              AND  lower(en_obj.canonical_name) = lower($4)
+                              AND  re.invalidated_at IS NULL
+                            RETURNING re.id
+                            """,
+                            tenant_id, t.canonical_subj, t.predicate,
+                            t.canonical_obj, t.reason or "superseded by later conversation",
+                        )
+                        if retired:
+                            logger.info(
+                                "Invalidated belief: %s -[%s]-> %s (%s)",
+                                t.canonical_subj, t.predicate, t.canonical_obj, t.reason,
+                            )
+                        continue
+
                     # ── Upsert SUBJECT ──────────────────────────────────────
                     subj_id: uuid.UUID = await conn.fetchval(
                         """
@@ -441,24 +555,42 @@ class TripletExtractor:
                             obj_id
                         )
 
+                    # ── Retire contradicted beliefs first ──────────────────
+                    # Asserting "mastered X" must retire "struggles_with X",
+                    # and vice versa. Without this the two coexist forever and
+                    # the prompt shows the model both, with nothing saying
+                    # which is current.
+                    await conn.execute(
+                        "SELECT invalidate_opposing_edges($1, $2, $3, $4, $5)",
+                        tenant_id, subj_id, obj_id, t.predicate,
+                        f"superseded when the student showed {t.predicate}",
+                    )
+
                     # ── Upsert RELATION EDGE ────────────────────────────────
-                    # If this (subject, predicate, object) edge already exists in the session,
-                    # accumulate weight (repeated observations strengthen edge).
+                    # ON CONFLICT targets the partial unique index over LIVE
+                    # edges (migration 009), so a re-asserted belief that was
+                    # previously invalidated creates a fresh row instead of
+                    # resurrecting the dead one, keeping history intact.
                     await conn.execute(
                         """
                         INSERT INTO relation_edges
                             (tenant_id, session_id, subject_id, predicate, object_id,
-                             weight, source_turn_id, evidence)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                             weight, source_turn_id, evidence, observation_count)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1)
                         ON CONFLICT (tenant_id, session_id, subject_id, predicate, object_id)
+                            WHERE invalidated_at IS NULL
                         DO UPDATE SET
-                            weight         = LEAST(
+                            weight            = LEAST(
                                 relation_edges.weight + EXCLUDED.weight * 0.1,
                                 2.0               -- cap weight at 2.0
                             ),
-                            source_turn_id = EXCLUDED.source_turn_id,
-                            evidence       = EXCLUDED.evidence,
-                            updated_at     = NOW()
+                            -- Repeat observation is its own signal and used to
+                            -- be crushed into the weight float alongside
+                            -- extraction confidence and recency.
+                            observation_count = relation_edges.observation_count + 1,
+                            source_turn_id    = EXCLUDED.source_turn_id,
+                            evidence          = COALESCE(NULLIF(EXCLUDED.evidence, ''), relation_edges.evidence),
+                            updated_at        = NOW()
                         """,
                         tenant_id,
                         session_id,
