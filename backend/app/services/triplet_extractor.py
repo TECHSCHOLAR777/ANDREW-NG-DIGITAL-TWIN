@@ -195,7 +195,7 @@ OUTPUT FORMAT (strict JSON array of operations):
 # thread pool. The extractor previously loaded a SECOND copy of mpnet into the
 # same process (roughly 420MB of duplicated weights) and encoded on the default
 # executor, competing with request-path work.
-from .retrieval import compute_embedding as _compute_embedding
+from . import embeddings
 from .graph_memory import (
     fetch_live_subgraph,
     format_subgraph_for_prompt,
@@ -464,7 +464,11 @@ class TripletExtractor:
         missing_names = [name for name in unique_canonical_names if name and name.strip() and name not in existing_embeddings]
         if missing_names:
             logger.info("Computing embeddings upfront for %d missing entities", len(missing_names))
-            embeddings_list = await asyncio.gather(*[_compute_embedding(name) for name in missing_names])
+            # Entity names are stored items, not queries, so they use the
+            # document task type to match how corpus chunks were embedded.
+            embeddings_list = await asyncio.gather(
+                *[embeddings.embed_document(name, self._api_key) for name in missing_names]
+            )
             for name, emb in zip(missing_names, embeddings_list):
                 existing_embeddings[name] = emb
 

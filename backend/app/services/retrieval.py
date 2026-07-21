@@ -57,55 +57,26 @@ REWRITE_MODEL        = os.getenv("REWRITE_MODEL", "gemini-2.5-flash")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # EMBEDDING
-# Runs on a dedicated bounded thread pool. Previously this used the default
-# asyncio executor, which is shared with the blocking Gemini SDK calls — a
-# CPU-bound encode and a network-bound generation competing for the same few
-# threads meant each could starve the other under load.
+# Delegated to services/embeddings.py, which selects the provider. Queries and
+# documents are embedded with different task types where the provider supports
+# it, because a question and the passage answering it are not the same kind of
+# text.
 # ─────────────────────────────────────────────────────────────────────────────
-_embed_model = None
-_embed_pool: ThreadPoolExecutor | None = None
+from . import embeddings
 
 
-def _get_embed_pool() -> ThreadPoolExecutor:
-    global _embed_pool
-    if _embed_pool is None:
-        _embed_pool = ThreadPoolExecutor(
-            max_workers=EMBED_WORKERS,
-            thread_name_prefix="embed",
-        )
-    return _embed_pool
-
-
-def get_embed_model():
-    global _embed_model
-    if _embed_model is None:
-        from sentence_transformers import SentenceTransformer
-        logger.info("Loading embedding model %s ...", EMBED_MODEL_NAME)
-        _embed_model = SentenceTransformer(EMBED_MODEL_NAME)
-        logger.info("Embedding model ready.")
-    return _embed_model
+async def compute_embedding(text: str, api_key: str = "") -> list[float]:
+    """Embed a search query."""
+    return await embeddings.embed_query(text, api_key)
 
 
 def preload_embed_model() -> None:
-    """Warm the model at startup so the first request does not pay for it."""
-    get_embed_model()
-
-
-async def compute_embedding(text: str) -> list[float]:
-    """Compute a 768-dim embedding locally (no API key involved)."""
-    loop = asyncio.get_running_loop()
-    model = get_embed_model()
-    return await loop.run_in_executor(
-        _get_embed_pool(),
-        lambda: model.encode(text, normalize_embeddings=False).tolist(),
-    )
+    """Warm the local model at startup. No-op for the API provider."""
+    embeddings.preload()
 
 
 def shutdown_embed_pool() -> None:
-    global _embed_pool
-    if _embed_pool is not None:
-        _embed_pool.shutdown(wait=False)
-        _embed_pool = None
+    pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -429,7 +400,7 @@ async def retrieve_context(
     if precomputed_embedding and len(precomputed_embedding) == 768 and not was_rewritten:
         embedding = precomputed_embedding
     else:
-        embedding = await compute_embedding(query_text)
+        embedding = await compute_embedding(query_text, gemini_key)
 
     ranked = await hybrid_retrieve(db, caller_tenant_id, embedding, query_text, top_k)
     confidence, is_grounded = score_confidence(ranked)
@@ -440,7 +411,7 @@ async def retrieve_context(
     prerequisite_passages: list[Passage] = []
     if prerequisite_hints:
         prerequisite_passages = await _retrieve_prerequisites(
-            db, caller_tenant_id, prerequisite_hints,
+            db, caller_tenant_id, prerequisite_hints, gemini_key,
         )
 
     neighbors = await expand_neighbors(db, caller_tenant_id, ranked)
@@ -471,6 +442,7 @@ async def _retrieve_prerequisites(
     db: asyncpg.Pool,
     caller_tenant_id: str | None,
     concepts: list[str],
+    api_key: str = "",
     per_concept: int = 2,
 ) -> list[Passage]:
     """
@@ -484,7 +456,7 @@ async def _retrieve_prerequisites(
     out: list[Passage] = []
     for concept in concepts[:3]:
         try:
-            embedding = await compute_embedding(concept)
+            embedding = await compute_embedding(concept, api_key)
             rows = await hybrid_retrieve(db, caller_tenant_id, embedding, concept, per_concept)
             if not rows:
                 continue

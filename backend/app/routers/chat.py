@@ -381,7 +381,7 @@ async def _prepare_turn(
             is_grounded=True,   # a greeting is not an ungrounded claim
             query_used=body.message, was_rewritten=False,
         )
-        embedding = await rtv.compute_embedding(body.message)
+        embedding = await rtv.compute_embedding(body.message, gemini_key)
 
     graph_rows = await _run_graph_traversal(db, tenant_id, embedding)
     graph_summary = await _build_graph_context_summary(db, tenant_id, body.session_id, graph_rows)
