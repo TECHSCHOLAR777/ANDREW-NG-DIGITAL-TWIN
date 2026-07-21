@@ -68,3 +68,6 @@ tsconfig.tsbuildinfo
 .DS_Store
 Thumbs.db
 env
+
+#md
+technical_report.md
