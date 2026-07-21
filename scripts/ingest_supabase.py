@@ -17,17 +17,23 @@ import os
 import re
 import asyncio
 import logging
+import uuid
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dotenv import load_dotenv
 import asyncpg
-import google.generativeai as genai
 from tqdm import tqdm
 
 load_dotenv()
 
 # Configuration
 CLEANED_DIR = Path("data/cleaned")
-EMBEDDING_MODEL = "models/gemini-embedding-001"
+# Embeddings are computed locally with sentence-transformers (768 dims).
+# Must match EMBED_MODEL used by the backend at query time, or vectors from
+# ingestion and vectors from search will live in different spaces.
+EMBEDDING_MODEL = os.environ.get("EMBED_MODEL", "all-mpnet-base-v2")
 DEFAULT_TENANT_NAME = "Andrew Ng Digital Twin"
 
 logging.basicConfig(level=logging.INFO)
@@ -59,30 +65,12 @@ def parse_metadata_headers(content: str) -> tuple[dict, str]:
     return metadata, body_text.strip()
 
 # ── Split Document into Chunks ────────────────────────────────────────────────
-def chunk_text(text: str, target_len: int = 1000) -> list[str]:
-    """Simple length-based chunking with paragraph alignment."""
-    paragraphs = text.split("\n\n")
-    chunks = []
-    current_chunk = []
-    current_len = 0
+# Structure-aware chunking lives in scripts/chunking.py. The previous
+# implementation packed paragraphs to 1000 characters with no overlap and no
+# titles, so a retrieved chunk frequently began mid-explanation and used
+# notation the previous chunk had introduced.
+from chunking import chunk_document  # noqa: E402
 
-    for para in paragraphs:
-        para = para.strip()
-        if not para:
-            continue
-        para_len = len(para)
-        if current_len + para_len > target_len and current_chunk:
-            chunks.append("\n\n".join(current_chunk))
-            current_chunk = [para]
-            current_len = para_len
-        else:
-            current_chunk.append(para)
-            current_len += para_len + 2 # account for newlines
-
-    if current_chunk:
-        chunks.append("\n\n".join(current_chunk))
-
-    return chunks
 
 _local_model = None
 
@@ -92,12 +80,47 @@ def get_embeddings_local(texts: list[str]) -> list[list[float]]:
         return []
     from sentence_transformers import SentenceTransformer
     global _local_model
-    if "_local_model" not in globals():
-        logger.info("Loading local SentenceTransformer model 'all-mpnet-base-v2'...")
-        globals()["_local_model"] = SentenceTransformer("all-mpnet-base-v2")
+    if _local_model is None:
+        logger.info("Loading local SentenceTransformer model '%s'...", EMBEDDING_MODEL)
+        _local_model = SentenceTransformer(EMBEDDING_MODEL)
     
-    model = globals()["_local_model"]
-    return model.encode(texts, show_progress_bar=True, batch_size=128).tolist()
+    return _local_model.encode(texts, show_progress_bar=True, batch_size=128).tolist()
+
+
+async def ensure_corpus_tenant(conn: asyncpg.Connection) -> uuid.UUID:
+    """Return the stable tenant id that owns the shared Andrew corpus."""
+    configured_id = os.environ.get("CORPUS_TENANT_ID", "").strip()
+    if configured_id:
+        try:
+            tenant_id = uuid.UUID(configured_id)
+            await conn.execute(
+                """
+                INSERT INTO tenants (id, name)
+                VALUES ($1::uuid, $2)
+                ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name
+                """,
+                tenant_id,
+                DEFAULT_TENANT_NAME,
+            )
+            return tenant_id
+        except Exception as exc:
+            raise ValueError(f"Invalid or unusable CORPUS_TENANT_ID={configured_id}") from exc
+
+    tenant_id = await conn.fetchval(
+        "SELECT id FROM tenants WHERE name = $1 ORDER BY created_at ASC LIMIT 1",
+        DEFAULT_TENANT_NAME,
+    )
+    if tenant_id:
+        return tenant_id
+
+    return await conn.fetchval(
+        """
+        INSERT INTO tenants (name)
+        VALUES ($1)
+        RETURNING id
+        """,
+        DEFAULT_TENANT_NAME,
+    )
 
 # ── Main Ingestion Runner ─────────────────────────────────────────────────────
 async def main():
@@ -114,18 +137,8 @@ async def main():
     logger.info("Connecting to Supabase to fetch initial metadata...")
     conn = await asyncpg.connect(dsn=db_url)
 
-    # 1. Ensure a default tenant exists
-    tenant_id = await conn.fetchval(
-        """
-        INSERT INTO tenants (name)
-        VALUES ($1)
-        ON CONFLICT DO NOTHING
-        RETURNING id
-        """,
-        DEFAULT_TENANT_NAME
-    )
-    if not tenant_id:
-        tenant_id = await conn.fetchval("SELECT id FROM tenants LIMIT 1")
+    # 1. Ensure a stable shared-corpus tenant exists
+    tenant_id = await ensure_corpus_tenant(conn)
 
     logger.info("Using Tenant ID: %s", tenant_id)
 
@@ -168,7 +181,8 @@ async def main():
         content = content.replace("\x00", "").replace("\u0000", "")
 
         meta, body_text = parse_metadata_headers(content)
-        chunks = chunk_text(body_text)
+        doc_title = meta.get("title") or file_path.stem.replace("_", " ")
+        chunks = chunk_document(body_text, doc_title=doc_title)
 
         # Idempotency check using local cache
         db_chunk_count = db_files.get(source_file, 0)
@@ -194,7 +208,12 @@ async def main():
                 "source_file": source_file,
                 "source_type": source_type,
                 "chunk_index": idx,
-                "chunk_text": chunk
+                # Stored text stays clean for display...
+                "chunk_text": chunk.text,
+                # ...while the embedded text carries the heading trail, so a
+                # fragment about "the update rule" is no longer identical in
+                # vector space to every other update rule in the corpus.
+                "embed_text": chunk.embed_text,
             })
 
     if not pending_chunks:
@@ -215,7 +234,7 @@ async def main():
         logger.info("Processing Ingestion Batch %d/%d (size %d)...", batch_num, total_batches, len(batch))
         
         # 3a. Compute embeddings locally (no DB connection active)
-        texts_to_embed = [c["chunk_text"] for c in batch]
+        texts_to_embed = [c["embed_text"] for c in batch]
         try:
             vectors = get_embeddings_local(texts_to_embed)
         except Exception as e:
@@ -233,7 +252,8 @@ async def main():
                 c["source_type"],
                 c["chunk_index"],
                 c["chunk_text"],
-                str(vector)
+                str(vector),
+                True,   # is_shared: this is the public Andrew corpus
             )
             for c, vector in zip(batch, vectors)
         ]
@@ -241,9 +261,10 @@ async def main():
         try:
             await conn.executemany(
                 """
-                INSERT INTO knowledge_chunks 
-                    (tenant_id, source_file, source_type, chunk_index, chunk_text, embedding)
-                VALUES ($1, $2, $3, $4, $5, $6::vector)
+                INSERT INTO knowledge_chunks
+                    (tenant_id, source_file, source_type, chunk_index, chunk_text,
+                     embedding, is_shared)
+                VALUES ($1, $2, $3, $4, $5, $6::vector, $7)
                 """,
                 insert_data
             )
