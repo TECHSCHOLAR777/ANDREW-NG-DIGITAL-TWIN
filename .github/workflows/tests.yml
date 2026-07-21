@@ -1,0 +1,91 @@
+name: tests
+
+# Runs only the checks that need no API key and no database, so every push is
+# gated on something real. The retrieval, persona and memory evaluations need
+# live credentials and are run manually; see scripts/eval/README.md.
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  backend:
+    name: backend unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install test dependencies
+        # sentence-transformers is stubbed by the tests themselves, so the
+        # heavy ML stack is not needed to run them. Keeping CI light matters:
+        # a slow pipeline stops being run.
+        run: pip install pydantic asyncpg tenacity python-dotenv httpx
+
+      - name: Run unit tests
+        run: |
+          for f in backend/tests/test_*.py; do
+            echo "--- $f"
+            python "$f" || exit 1
+          done
+
+  frontend:
+    name: frontend build and types
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm run build
+
+  sql:
+    name: migration syntax
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install asyncpg python-dotenv
+
+      - name: Apply every migration in order
+        # Catches ordering mistakes and syntax errors before they reach a real
+        # database, which previously could only be discovered by pasting SQL
+        # into the Supabase console and seeing what broke.
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+        run: python scripts/migrate.py
+
+      - name: Re-run to prove migrations are idempotent
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+        run: python scripts/migrate.py --status
