@@ -70,9 +70,20 @@ import sys
 import threading
 import time
 
+# Do NOT let pip upgrade torch. Kaggle ships 2.6.0, which is what
+# chatterbox-tts pins; upgrading it breaks transformers with a confusing
+# "Could not import module 'LlamaModel'". Constraints pin the three packages
+# that matter and let pip resolve the rest.
 print("Installing dependencies. Takes a few minutes on first run.")
+with open("/tmp/constraints.txt", "w") as f:
+    f.write(
+        "torch==2.6.0\n"
+        "torchaudio==2.6.0\n"
+        "numpy<2.0.0\n"
+        "safetensors==0.5.3\n"
+    )
 subprocess.run(
-    [sys.executable, "-m", "pip", "install", "-q",
+    [sys.executable, "-m", "pip", "install", "-q", "-c", "/tmp/constraints.txt",
      "chatterbox-tts", "fastapi", "uvicorn", "soundfile", "nest_asyncio"],
     check=False,
 )
