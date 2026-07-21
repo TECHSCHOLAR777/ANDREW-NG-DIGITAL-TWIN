@@ -1,0 +1,67 @@
+# ============================================================
+# For running the whole system with one command, and for anyone
+# who is not you.
+#
+# Daily development is still better done natively: uvicorn --reload
+# and next dev both hot-reload, and iteration speed is what you live
+# in. This exists so a stranger can start it, and so deployment has
+# a reference for how the pieces fit.
+#
+#   docker compose up
+#
+# The database is deliberately NOT included. The project targets
+# Supabase, and running a throwaway Postgres here would mean the
+# thing you develop against is not the thing you deploy against.
+# Point DATABASE_URL at Supabase, or at a local Postgres with
+# pgvector if you prefer.
+# ============================================================
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      # Everything comes from .env; nothing is duplicated here, so there
+      # is one place to change a setting.
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required, see .env.example}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:3000}
+      # Defaults to the tunnel from notebooks/kaggle_tts_server.py when set,
+      # otherwise the frontend falls back to browser speech.
+      CHATTERBOX_URL: ${CHATTERBOX_URL:-http://127.0.0.1:5002/v1/audio/speech}
+      RETRIEVAL_MIN_COSINE: ${RETRIEVAL_MIN_COSINE:-0.35}
+      ENABLE_QUERY_REWRITE: ${ENABLE_QUERY_REWRITE:-true}
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      # Generous, because the embedding model is baked into the image but
+      # still has to load into memory before the first request.
+      start_period: 90s
+      retries: 3
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      # Baked at build time by Next.js, so the browser talks to the host
+      # port rather than the compose network name.
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://127.0.0.1:8000}
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+# The cloned-voice service is not here on purpose. It needs a GPU, and the
+# supported path with no local GPU is notebooks/kaggle_tts_server.py, which
+# runs on Kaggle and is reached over a tunnel. Set CHATTERBOX_URL to the URL
+# it prints. Without it, voice falls back to browser speech synthesis.

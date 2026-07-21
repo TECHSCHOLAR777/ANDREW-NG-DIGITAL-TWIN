@@ -1,0 +1,22 @@
+# ============================================================
+# Corpus-building dependencies.
+#
+# Needed only to collect, clean and ingest source material. The
+# deployed API never imports any of this, so keeping it out of
+# requirements.txt keeps the runtime image small.
+#
+#   pip install -r requirements.txt -r requirements-ingest.txt
+# ============================================================
+
+-r requirements.txt
+
+# ── Collection ──────────────────────────────────────────────
+PyMuPDF>=1.24.0
+youtube-transcript-api>=0.6.0
+yt-dlp>=2024.0.0
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
+
+# ── Progress reporting during long ingests ──────────────────
+tqdm>=4.66.0
