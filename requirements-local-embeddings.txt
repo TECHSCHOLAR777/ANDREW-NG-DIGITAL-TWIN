@@ -1,0 +1,17 @@
+# ============================================================
+# Optional: run embeddings in-process instead of via the API.
+#
+#     pip install -r requirements.txt -r requirements-local-embeddings.txt
+#     EMBED_PROVIDER=local
+#
+# Useful for development without an API key, and for offline work. Costs
+# roughly 850MB of RAM and 760MB on disk, which is why it is not the default
+# for deployment.
+#
+# In Docker, install CPU-only torch:
+#     pip install --extra-index-url https://download.pytorch.org/whl/cpu ...
+# The default wheel pulls gigabytes of unused CUDA libraries.
+# ============================================================
+
+sentence-transformers>=2.2.2
+torch>=2.0.0

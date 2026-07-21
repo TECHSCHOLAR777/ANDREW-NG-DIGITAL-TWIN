@@ -20,10 +20,14 @@ python-dotenv>=1.0.0
 httpx>=0.27.0
 tenacity>=8.2.3
 
-# ── Embeddings (local, 768-dim) ─────────────────────────────
-# Install CPU-only torch in Docker via the PyTorch CPU index (see Dockerfile);
-# the default wheel pulls several gigabytes of unused CUDA libraries.
-sentence-transformers>=2.2.2
+# ── Embeddings ──────────────────────────────────────────────
+# With EMBED_PROVIDER=gemini (the default) embeddings come from the API and
+# the runtime needs nothing here: no torch, no model weights. That is the
+# difference between a 200MB image that fits a free tier and a 1.4GB image
+# needing 2GB of RAM.
+#
+# For EMBED_PROVIDER=local, install the extras:
+#     pip install -r requirements-local-embeddings.txt
 numpy>=1.24.0
 
 # ── Gemini ──────────────────────────────────────────────────
