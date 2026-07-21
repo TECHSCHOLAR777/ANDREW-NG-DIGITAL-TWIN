@@ -1,4 +1,5 @@
 "use client";
+/* eslint-disable react-hooks/set-state-in-effect, react-hooks/immutability */
 
 import React, { useState, useEffect, useRef } from "react";
 import {
@@ -16,26 +17,90 @@ import {
   Headphones,
   X,
   Sliders,
+  Menu,
+  Sun,
+  Moon,
+  ChevronDown,
+  Sparkles,
 } from "lucide-react";
 import { KnowledgeGraphView } from "../components/KnowledgeGraphView";
+import { MessageContent } from "../components/MessageContent";
+import { ErrorNotice, classifyError, type ChatError } from "../components/ErrorNotice";
 import type { TripletRow, EdgeRow } from "../types/graph";
 
-// Local storage keys
+// Browser storage keys
 const KEY_LOCAL_STORAGE_GEMINI = "andrew_ng_byok_key";
 const KEY_LOCAL_STORAGE_TENANT = "andrew_ng_tenant_uuid";
+const KEY_LOCAL_STORAGE_ACTIVE = "andrew_ng_active_session";
+const KEY_LOCAL_STORAGE_THEME = "andrew_ng_theme";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
+
+type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
+
+interface SpeechRecognitionResultEventLike {
+  results: {
+    [index: number]: {
+      [index: number]: {
+        transcript: string;
+      };
+    };
+  };
+}
+
+interface SpeechRecognitionErrorEventLike {
+  error: string;
+}
+
+interface SpeechRecognitionLike {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onresult: ((event: SpeechRecognitionResultEventLike) => void) | null;
+  onend: (() => void) | null;
+  onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null;
+  start: () => void;
+  stop: () => void;
+}
+
+type SpeechWindow = Window &
+  typeof globalThis & {
+    SpeechRecognition?: SpeechRecognitionConstructor;
+    webkitSpeechRecognition?: SpeechRecognitionConstructor;
+  };
 
 interface RetrievedChunk {
   source_file: string;
   source_type: string;
   final_score: number;
+  chunk_text?: string;
 }
 
 interface Message {
   role: "user" | "assistant";
   content: string;
+  /** Concepts from earlier sessions that informed this answer. */
+  recalled?: string[];
   cacheStatus?: string;
+  cachedTokenCount?: number;
+  isGrounded?: boolean;
   retrievedChunks?: RetrievedChunk[];
 }
+
+interface GraphContextNode {
+  node_id: string;
+  canonical_name: string;
+  node_type: TripletRow["node_type"];
+  hop_distance: number;
+  combined_score: number;
+}
+
+// Shown on an untouched conversation. Concrete questions teach what the twin
+// is for far faster than any description.
+const SUGGESTED_QUESTIONS = [
+  "What is gradient descent?",
+  "Explain the bias-variance tradeoff",
+  "How should I actually start learning ML?",
+];
 
 interface ChatSession {
   id: string;
@@ -43,138 +108,6 @@ interface ChatSession {
   messages: Message[];
   triplets: TripletRow[];
   edges: EdgeRow[];
-}
-
-// Helper to parse simple markdown bold, inline code, lists, and LaTeX math formatting
-function formatMessageContent(text: string): React.ReactNode {
-  if (!text) return null;
-
-  // 1. Pre-process LaTeX math symbols to unicode equivalents and clean text representations
-  let processed = text;
-
-  // Replace common LaTeX fractions: \frac{a}{b} -> (a)/(b)
-  processed = processed.replace(/\\frac\{([^}]+)\}\{([^}]+)\}/g, "($1)/($2)");
-
-  // Replace LaTeX sum: \sum_{a}^{b} -> Σ_{a}^{b}
-  processed = processed.replace(/\\sum_\{([^}]+)\}\^\{([^}]+)\}/g, "Σ_{$1}^{$2}");
-  processed = processed.replace(/\\sum_\{([^}]+)\}/g, "Σ_{$1}");
-
-  // Replace subscript formatting to subscript representation: e.g. \theta_j -> θ_j
-  processed = processed.replace(/\\theta_([a-zA-Z0-9])/g, "θ_$1");
-  processed = processed.replace(/\\theta_\{([^}]+)\}/g, "θ_($1)");
-  
-  // Replace other common subscripts
-  processed = processed.replace(/_\{([^}]+)\}/g, "_($1)");
-
-  const greekLetters: Record<string, string> = {
-    '\\alpha': 'α',
-    '\\beta': 'β',
-    '\\gamma': 'γ',
-    '\\delta': 'δ',
-    '\\epsilon': 'ε',
-    '\\zeta': 'ζ',
-    '\\eta': 'η',
-    '\\theta': 'θ',
-    '\\iota': 'ι',
-    '\\kappa': 'κ',
-    '\\lambda': 'λ',
-    '\\mu': 'μ',
-    '\\nu': 'ν',
-    '\\xi': 'ξ',
-    '\\pi': 'π',
-    '\\rho': 'ρ',
-    '\\sigma': 'σ',
-    '\\tau': 'τ',
-    '\\upsilon': 'υ',
-    '\\phi': 'φ',
-    '\\chi': 'χ',
-    '\\psi': 'ψ',
-    '\\omega': 'ω',
-  };
-  
-  for (const [latex, unicode] of Object.entries(greekLetters)) {
-    processed = processed.replace(new RegExp(`\\\\?${latex.replace('\\', '\\\\')}`, 'g'), unicode);
-  }
-  
-  // Remove standalone math mode wrapper signs $ ... $ or $$ ... $$
-  processed = processed.replace(/\$\$/g, "");
-  processed = processed.replace(/\$/g, "");
-  
-  // 2. Parse markdown formatting line-by-line
-  const lines = processed.split("\n");
-  const elements: React.ReactNode[] = [];
-  let inList = false;
-  let listItems: React.ReactNode[] = [];
-
-  const parseInlineStyles = (lineText: string, keyPrefix: string): React.ReactNode[] => {
-    // Split by ** for bold
-    const boldParts = lineText.split("**");
-    return boldParts.flatMap((boldPart, boldIndex) => {
-      const isBold = boldIndex % 2 === 1;
-      
-      if (isBold) {
-        return <strong key={`${keyPrefix}-b-${boldIndex}`} className="font-semibold text-slate-900">{boldPart}</strong>;
-      } else {
-        // Handle code blocks or inline code if any (e.g. `code`)
-        const codeParts = boldPart.split("`");
-        return codeParts.map((codePart, codeIndex) => {
-          const isCode = codeIndex % 2 === 1;
-          if (isCode) {
-            return <code key={`${keyPrefix}-c-${codeIndex}`} className="bg-slate-100 px-1 py-0.5 rounded text-rose-600 font-mono text-[12px]">{codePart}</code>;
-          }
-          return codePart;
-        });
-      }
-    });
-  };
-
-  lines.forEach((line, lineIdx) => {
-    const trimmed = line.trim();
-    
-    // Check if it's a bullet point
-    if (trimmed.startsWith("* ") || trimmed.startsWith("- ")) {
-      if (!inList) {
-        inList = true;
-        listItems = [];
-      }
-      const itemContent = trimmed.substring(2);
-      listItems.push(
-        <li key={`li-${lineIdx}`} className="ml-4 list-disc mb-1.5 pl-1 text-slate-800">
-          {parseInlineStyles(itemContent, `li-content-${lineIdx}`)}
-        </li>
-      );
-    } else {
-      if (inList) {
-        elements.push(
-          <ul key={`ul-${lineIdx}`} className="my-2 pl-4">
-            {listItems}
-          </ul>
-        );
-        inList = false;
-        listItems = [];
-      }
-      
-      if (trimmed === "") {
-        elements.push(<div key={`br-${lineIdx}`} className="h-2" />);
-      } else {
-        elements.push(
-          <p key={`p-${lineIdx}`} className="mb-2 text-slate-800">
-            {parseInlineStyles(line, `p-content-${lineIdx}`)}
-          </p>
-        );
-      }
-    }
-  });
-
-  if (inList) {
-    elements.push(
-      <ul key="ul-final" className="my-2 pl-4">
-        {listItems}
-      </ul>
-    );
-  }
-
-  return <div className="space-y-1">{elements}</div>;
 }
 
 export default function ChatPage() {
@@ -186,24 +119,44 @@ export default function ChatPage() {
   const [graphView, setGraphView] = useState<"session" | "global">("session");
   const [isLoading, setIsLoading] = useState(false);
   const [isSyncingGraph, setIsSyncingGraph] = useState(false);
+
+  // Which panel is visible below the lg breakpoint. On a phone this is a chat
+  // app with two drawers; the three-column workspace is a desktop luxury and
+  // holding onto it at small sizes is how the old fixed-width layout became
+  // unusable under about 1200px.
+  const [mobilePanel, setMobilePanel] = useState<"chat" | "sessions" | "graph">("chat");
+
+  // Failures render as a dedicated notice, not as a message from the tutor.
+  const [chatError, setChatError] = useState<ChatError | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [lastMessage, setLastMessage] = useState<string>("");
   
   // Voice controls
   const [readAloudEnabled, setReadAloudEnabled] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [voiceState, setVoiceState] = useState<"inactive" | "listening" | "thinking" | "speaking">("inactive");
   
-  // Pedagogical Speed and Catchphrase settings
+  // Pedagogical Speed settings
   const [ttsSpeed, setTtsSpeed] = useState<number>(1.0);
-  const useCatchphrases = true;
 
   // Ref handles for speech engines
-  const recognitionRef = useRef<any>(null);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const voiceStateRef = useRef<string>("inactive");
+
+  // Always-fresh handle to submitDialogueMessage for browser speech callbacks.
+  // The recognition handlers are registered once on mount; without this ref
+  // they capture the FIRST render's closure (activeSession=null, tenantId=""),
+  // which silently discarded every voice-mode utterance.
+  const submitRef = useRef<(text: string) => Promise<void>>(async () => {});
 
   // Custom Cloned TTS Audio Player Refs
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
-  const audioQueueRef = useRef<{ text: string; audio: HTMLAudioElement | null; url: string }[]>([]);
+  const ttsAbortRef = useRef<AbortController | null>(null);
   const isPlayingRef = useRef<boolean>(false);
+  // Set when the cloned-voice service returns 502, so playback switches to
+  // browser speech for the rest of the answer instead of going quiet.
+  const clonedVoiceDownRef = useRef<boolean>(false);
+  const [clonedVoiceAvailable, setClonedVoiceAvailable] = useState<boolean | null>(null);
 
   // Keep state sync ref for async timers/callbacks
   useEffect(() => {
@@ -211,11 +164,53 @@ export default function ChatPage() {
   }, [voiceState]);
   
   const chatBottomRef = useRef<HTMLDivElement>(null);
+  const voiceCloseRef = useRef<HTMLButtonElement>(null);
+  const focusBeforeModalRef = useRef<HTMLElement | null>(null);
+
+  // Colour theme. Defaults to the system preference; an explicit choice is
+  // remembered and wins over it in both directions.
+  const [theme, setTheme] = useState<"system" | "light" | "dark">("system");
+
+  useEffect(() => {
+    const saved = localStorage.getItem(KEY_LOCAL_STORAGE_THEME) as typeof theme | null;
+    if (saved) setTheme(saved);
+  }, []);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    if (theme === "system") root.removeAttribute("data-theme");
+    else root.setAttribute("data-theme", theme);
+    localStorage.setItem(KEY_LOCAL_STORAGE_THEME, theme);
+  }, [theme]);
+
+  // Modal behaviour: Escape closes, focus moves in on open and returns to
+  // wherever it came from on close. Without this a keyboard user could tab
+  // into the page behind the overlay and get lost.
+  useEffect(() => {
+    if (voiceState === "inactive") {
+      focusBeforeModalRef.current?.focus?.();
+      focusBeforeModalRef.current = null;
+      return;
+    }
+    if (!focusBeforeModalRef.current) {
+      focusBeforeModalRef.current = document.activeElement as HTMLElement;
+    }
+    voiceCloseRef.current?.focus();
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        stopSpeaking();
+        setVoiceState("inactive");
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [voiceState]);
 
   // 1. Initial configuration load & Web Speech API setup
   useEffect(() => {
-    // Load BYOK key
-    const savedKey = localStorage.getItem(KEY_LOCAL_STORAGE_GEMINI) || "";
+    // Load BYOK key for this browser session only. Do not persist API keys long-term.
+    const savedKey = sessionStorage.getItem(KEY_LOCAL_STORAGE_GEMINI) || "";
     setGeminiKey(savedKey);
 
     // Load or generate Tenant UUID for persistent cross-reload learning memory
@@ -226,38 +221,36 @@ export default function ChatPage() {
     }
     setTenantId(savedTenant);
 
-    // Build default initial session
-    const initialSessionId = crypto.randomUUID();
-    const defaultSession: ChatSession = {
-      id: initialSessionId,
-      title: "New Dialogue",
-      messages: [
-        {
-          role: "assistant",
-          content: "Hello! I am Andrew Ng. I teach machine learning concepts using CS229 notes and DeepLearning.ai resources. Ask me anything about neural networks, bias-variance analysis, or AI strategy."
-        }
-      ],
-      triplets: [],
-      edges: []
-    };
-    setSessions([defaultSession]);
-    setActiveSessionId(initialSessionId);
+    // Ask whether the cloned voice is reachable, so the UI can say which
+    // voice the user is about to hear instead of leaving them guessing.
+    fetch(`${API_BASE_URL}/api/v1/chat/tts/status`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setClonedVoiceAvailable(d ? Boolean(d.available) : false))
+      .catch(() => setClonedVoiceAvailable(false));
+
+    // Restore conversations from the server. Every turn has always been
+    // written to Postgres; nothing ever read them back, so a refresh destroyed
+    // history that was sitting safely in the database the whole time.
+    void restoreSessions(savedTenant);
 
     // Setup Speech Recognition
     if (typeof window !== "undefined") {
+      const speechWindow = window as SpeechWindow;
       const SpeechRecognition =
-        (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+        speechWindow.SpeechRecognition || speechWindow.webkitSpeechRecognition;
       if (SpeechRecognition) {
         const rec = new SpeechRecognition();
         rec.continuous = false;
         rec.interimResults = false;
         rec.lang = "en-US";
 
-        rec.onresult = (event: any) => {
+        rec.onresult = (event: SpeechRecognitionResultEventLike) => {
           const transcript = event.results[0][0].transcript;
           const isVoiceActive = voiceStateRef.current !== "inactive";
           if (isVoiceActive) {
-            submitDialogueMessage(transcript);
+            // Call through the ref so we always hit the latest closure
+            // (current session, current tenant, current key).
+            submitRef.current(transcript);
           } else {
             setUserInput((prev) => (prev ? prev + " " + transcript : transcript));
           }
@@ -267,7 +260,7 @@ export default function ChatPage() {
           if (voiceStateRef.current === "listening") {
             try {
               rec.start();
-            } catch (e) {
+            } catch {
               // Ignore
             }
           } else if (voiceStateRef.current === "inactive") {
@@ -275,12 +268,12 @@ export default function ChatPage() {
           }
         };
 
-        rec.onerror = (event: any) => {
+        rec.onerror = (event: SpeechRecognitionErrorEventLike) => {
           console.error("Speech recognition error:", event);
           if (voiceStateRef.current === "listening" && event.error === "no-speech") {
             try {
               rec.start();
-            } catch (e) {
+            } catch {
               // Ignore
             }
           } else {
@@ -292,6 +285,8 @@ export default function ChatPage() {
         recognitionRef.current = rec;
       }
     }
+    // Speech recognition is initialized once so browser callbacks can call the latest ref-backed state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Monitor voiceState transitions to start/stop the web speech capture
@@ -307,18 +302,113 @@ export default function ChatPage() {
     } else {
       try {
         recognitionRef.current.stop();
-      } catch (e) {
+      } catch {
         // Safe to ignore
       }
     }
   }, [voiceState]);
 
-  // 2. Scroll to bottom on new message
+  // 2. Scroll to bottom, but only when the reader is already near it.
+  // Unconditional autoscroll pulled the view away from anyone who had scrolled
+  // up to reread something, which during a stream happened on every token.
   useEffect(() => {
-    chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    const el = chatBottomRef.current;
+    if (!el) return;
+    const container = el.parentElement;
+    if (!container) return;
+    const distanceFromBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
+    if (distanceFromBottom < 160) {
+      el.scrollIntoView({ behavior: "smooth" });
+    }
   }, [sessions, activeSessionId]);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId) || null;
+
+  const lastMsg = activeSession?.messages[activeSession.messages.length - 1];
+  const hasStreamingText = Boolean(
+    isLoading && lastMsg?.role === "assistant" && lastMsg.content.length > 0
+  );
+  const showSuggestions = Boolean(
+    activeSession && !isLoading && !chatError &&
+    activeSession.messages.filter((m) => m.role === "user").length === 0
+  );
+
+  const GREETING: Message = {
+    role: "assistant",
+    content:
+      "Hello! I am Andrew Ng. I teach machine learning concepts using CS229 notes and DeepLearning.ai resources. Ask me anything about neural networks, bias-variance analysis, or AI strategy.",
+  };
+
+  const makeEmptySession = (title = "New conversation"): ChatSession => ({
+    id: crypto.randomUUID(),
+    title,
+    messages: [GREETING],
+    triplets: [],
+    edges: [],
+  });
+
+  // Rebuild the sidebar and the active transcript from the server.
+  const restoreSessions = async (tenant: string) => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/v1/chat/sessions`, {
+        headers: { "X-Tenant-Id": tenant },
+      });
+      if (!res.ok) throw new Error(String(res.status));
+
+      const rows: { id: string; title: string; message_count: number }[] = await res.json();
+      if (!rows.length) {
+        const fresh = makeEmptySession();
+        setSessions([fresh]);
+        setActiveSessionId(fresh.id);
+        return;
+      }
+
+      const restored: ChatSession[] = rows.map((r) => ({
+        id: r.id,
+        title: r.title || "Conversation",
+        messages: [],       // filled lazily when the session is opened
+        triplets: [],
+        edges: [],
+      }));
+      setSessions(restored);
+
+      // Reopen whatever was last active, when it still exists.
+      const remembered = localStorage.getItem(KEY_LOCAL_STORAGE_ACTIVE);
+      const target = restored.find((s) => s.id === remembered) ?? restored[0];
+      setActiveSessionId(target.id);
+      await loadSessionMessages(target.id, tenant);
+    } catch (e) {
+      console.error("Could not restore sessions:", e);
+      const fresh = makeEmptySession();
+      setSessions([fresh]);
+      setActiveSessionId(fresh.id);
+    }
+  };
+
+  // Transcripts load on demand rather than all at once, so a user with fifty
+  // conversations does not download every one of them at startup.
+  const loadSessionMessages = async (sessionId: string, tenant?: string) => {
+    const tid = tenant || tenantId;
+    if (!tid) return;
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/api/v1/chat/sessions/${sessionId}/messages`,
+        { headers: { "X-Tenant-Id": tid } },
+      );
+      if (!res.ok) return;
+      const stored: Message[] = await res.json();
+      setSessions((prev) =>
+        prev.map((s) =>
+          s.id === sessionId
+            ? { ...s, messages: stored.length ? stored : [GREETING] }
+            : s,
+        ),
+      );
+    } catch (e) {
+      console.error("Could not load transcript:", e);
+    }
+  };
 
   // Sync graph manually
   const handleSyncGraph = async (viewOverride?: "session" | "global") => {
@@ -326,11 +416,9 @@ export default function ChatPage() {
     setIsSyncingGraph(true);
     const viewToFetch = viewOverride || graphView;
     try {
-      const response = await fetch(`http://127.0.0.1:8000/api/v1/chat/graph/${activeSession.id}?view=${viewToFetch}`, {
-        headers: {
-          "X-Gemini-Api-Key": geminiKey.trim() || "AIzaSy...",
-          "X-Tenant-Id": tenantId
-        }
+      // Graph endpoint only needs tenant identity — no Gemini key.
+      const response = await fetch(`${API_BASE_URL}/api/v1/chat/graph/${activeSession.id}?view=${viewToFetch}`, {
+        headers: { "X-Tenant-Id": tenantId }
       });
       if (response.ok) {
         const graphData = await response.json();
@@ -354,23 +442,53 @@ export default function ChatPage() {
   };
 
   // Automatically sync graph when session, view, or tenant changes
+  // Skip sync for brand-new sessions with only the greeting — nothing to fetch
   useEffect(() => {
     if (activeSession?.id && tenantId) {
-      handleSyncGraph(graphView);
+      const hasUserMessages = activeSession.messages.some((m) => m.role === "user");
+      if (hasUserMessages || graphView === "global") {
+        handleSyncGraph(graphView);
+      }
     }
+    // Graph sync is event-driven by session/view changes; handleSyncGraph captures current request state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSession?.id, graphView, tenantId]);
+
+  // Poll the cheap extraction-status endpoint until the background task has
+  // finished, then refresh the graph once. Bounded so a stuck extraction can
+  // never leave the client polling forever.
+  const waitForGraphExtraction = async (sessionId: string, maxWaitMs = 30000) => {
+    const startedAt = Date.now();
+    let delay = 1500;
+
+    while (Date.now() - startedAt < maxWaitMs) {
+      await new Promise((r) => setTimeout(r, delay));
+      delay = Math.min(delay * 1.4, 5000);   // back off rather than hammer
+
+      try {
+        const res = await fetch(
+          `${API_BASE_URL}/api/v1/chat/graph/${sessionId}/status`,
+          { headers: { "X-Tenant-Id": tenantId } },
+        );
+        if (!res.ok) break;
+        const { pending_extractions: pending } = await res.json();
+        if (pending === 0) break;
+      } catch {
+        break;   // network trouble: fall through to one final sync
+      }
+    }
+
+    await handleSyncGraph();
+  };
 
   const handleResetMemory = async () => {
     if (!window.confirm("Are you sure you want to reset your learning history? This will clear all extracted graph concepts and dialogue history in the database.")) {
       return;
     }
     try {
-      await fetch("http://127.0.0.1:8000/api/v1/chat/clear", {
+      await fetch(`${API_BASE_URL}/api/v1/chat/clear`, {
         method: "POST",
-        headers: {
-          "X-Gemini-Api-Key": geminiKey.trim() || "AIzaSy...",
-          "X-Tenant-Id": tenantId
-        }
+        headers: { "X-Tenant-Id": tenantId }
       });
     } catch (e) {
       console.error("Failed to clear backend memory:", e);
@@ -378,88 +496,194 @@ export default function ChatPage() {
 
     const freshTenant = crypto.randomUUID();
     localStorage.setItem(KEY_LOCAL_STORAGE_TENANT, freshTenant);
+    localStorage.removeItem(KEY_LOCAL_STORAGE_ACTIVE);
     setTenantId(freshTenant);
 
-    const newId = crypto.randomUUID();
-    const defaultSession: ChatSession = {
-      id: newId,
-      title: "New Dialogue",
-      messages: [
-        {
-          role: "assistant",
-          content: "Hello! I am Andrew Ng. I teach machine learning concepts using CS229 notes and DeepLearning.ai resources. Ask me anything about neural networks, bias-variance analysis, or AI strategy."
-        }
-      ],
-      triplets: [],
-      edges: []
-    };
-    setSessions([defaultSession]);
-    setActiveSessionId(newId);
+    const fresh = makeEmptySession();
+    setSessions([fresh]);
+    setActiveSessionId(fresh.id);
   };
 
   // Save key to storage
   const handleSaveKey = (val: string) => {
     setGeminiKey(val);
-    localStorage.setItem(KEY_LOCAL_STORAGE_GEMINI, val);
+    sessionStorage.setItem(KEY_LOCAL_STORAGE_GEMINI, val);
   };
 
-  // Create new chat
+  // Create new chat. The session row is created server-side on the first
+  // message, so nothing is persisted until there is something to persist.
   const handleNewChat = () => {
-    const newId = crypto.randomUUID();
-    const newSession: ChatSession = {
-      id: newId,
-      title: "New Dialogue",
-      messages: [
-        {
-          role: "assistant",
-          content: "Hello! What concept or project are we diving into today?"
-        }
-      ],
-      triplets: [],
-      edges: []
-    };
+    const newSession = makeEmptySession();
     setSessions((prev) => [newSession, ...prev]);
-    setActiveSessionId(newId);
+    setActiveSessionId(newSession.id);
+    setMobilePanel("chat");
+    // Reset to session view so the KG panel starts empty for a fresh chat.
+    // Global view would immediately show cross-session data which is confusing.
+    setGraphView("session");
   };
 
-  // Delete chat
-  const handleDeleteChat = (id: string, e: React.MouseEvent) => {
+  // Delete chat, on the server as well as locally. Previously this only
+  // removed it from React state, so the conversation reappeared on refresh.
+  const handleDeleteChat = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
+
+    const target = sessions.find((s) => s.id === id);
+    const hasContent = (target?.messages.length ?? 0) > 1;
+    if (hasContent && !window.confirm("Delete this conversation? This cannot be undone.")) {
+      return;
+    }
+
     const filtered = sessions.filter((s) => s.id !== id);
-    setSessions(filtered);
+    const replacement = filtered.length ? filtered : [makeEmptySession()];
+    setSessions(replacement);
     if (activeSessionId === id) {
-      if (filtered.length > 0) {
-        setActiveSessionId(filtered[0].id);
-      } else {
-        const newId = crypto.randomUUID();
-        const newSession: ChatSession = {
-          id: newId,
-          title: "New Dialogue",
-          messages: [
-            {
-              role: "assistant",
-              content: "Hello! What concept or project are we diving into today?"
-            }
-          ],
-          triplets: [],
-          edges: []
-        };
-        setSessions([newSession]);
-        setActiveSessionId(newId);
-      }
+      setActiveSessionId(replacement[0].id);
+      if (filtered.length) void loadSessionMessages(replacement[0].id);
+    }
+
+    try {
+      await fetch(`${API_BASE_URL}/api/v1/chat/sessions/${id}`, {
+        method: "DELETE",
+        headers: { "X-Tenant-Id": tenantId },
+      });
+    } catch (err) {
+      console.error("Could not delete conversation on the server:", err);
     }
   };
-  // Cancel speech helper
+  // Cancel speech helper — also aborts in-flight TTS network requests so
+  // interrupting the tutor stops burning synthesis compute on unheard audio.
   const stopSpeaking = () => {
     if (typeof window !== "undefined" && window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
+    if (ttsAbortRef.current) {
+      ttsAbortRef.current.abort();
+      ttsAbortRef.current = null;
+    }
     if (currentAudioRef.current) {
       currentAudioRef.current.pause();
+      currentAudioRef.current.src = "";
       currentAudioRef.current = null;
     }
-    audioQueueRef.current = [];
     isPlayingRef.current = false;
+  };
+
+  // Fallback when the cloned-voice service is unreachable. The browser's own
+  // synthesis is generic, but a generic voice that works beats a cloned voice
+  // that does not, and the GPU session backing the clone is ephemeral by
+  // design (see notebooks/kaggle_tts_server.py).
+  const speakWithBrowser = (text: string, onFinished?: () => void) => {
+    if (typeof window === "undefined" || !window.speechSynthesis) {
+      onFinished?.();
+      return;
+    }
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = ttsSpeed;
+    utterance.onend = () => onFinished?.();
+    utterance.onerror = () => onFinished?.();
+    window.speechSynthesis.speak(utterance);
+  };
+
+  // Incremental speaker for the streaming path.
+  //
+  // Sentences are pushed in as the model produces them. Each one is sent for
+  // synthesis the moment it arrives, and playback runs sequentially behind
+  // that. This is what collapses time-to-first-audio: previously the client
+  // waited for the entire answer, then synthesised sentence by sentence, so
+  // nothing was audible for 8 to 30 seconds.
+  const createStreamingSpeaker = (onFinished?: () => void) => {
+    const controller = new AbortController();
+    ttsAbortRef.current = controller;
+    isPlayingRef.current = true;
+
+    const pending: Promise<string | null>[] = [];
+    const pendingText: string[] = [];   // parallel to `pending`, for fallback
+    let playIndex = 0;
+    let inputClosed = false;
+    let playing = false;
+
+    const synthesize = async (sentence: string): Promise<string | null> => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/v1/chat/tts`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Tenant-Id": tenantId },
+          body: JSON.stringify({ text: sentence, speed: ttsSpeed }),
+          signal: controller.signal,
+        });
+        if (!res.ok) {
+          // 502 means the cloned-voice service is down, which is expected
+          // whenever the GPU session has expired. Fall back rather than
+          // dropping the sentence silently.
+          if (res.status === 502) clonedVoiceDownRef.current = true;
+          return null;
+        }
+        clonedVoiceDownRef.current = false;
+        return URL.createObjectURL(await res.blob());
+      } catch {
+        return null; // aborted or failed: skip this sentence, keep the flow
+      }
+    };
+
+    const playNext = async () => {
+      if (playing) return;
+      playing = true;
+
+      while (playIndex < pending.length) {
+        if (!isPlayingRef.current || controller.signal.aborted) break;
+
+        const url = await pending[playIndex];
+        const sentenceText = pendingText[playIndex];
+        playIndex += 1;
+        if (!url) {
+          // No cloned audio for this sentence. Speak it with the browser so
+          // the answer is still heard end to end.
+          if (clonedVoiceDownRef.current && sentenceText) {
+            await new Promise<void>((resolve) => speakWithBrowser(sentenceText, resolve));
+          }
+          continue;
+        }
+        if (!isPlayingRef.current || controller.signal.aborted) {
+          URL.revokeObjectURL(url);
+          break;
+        }
+
+        await new Promise<void>((resolve) => {
+          const audio = new Audio(url);
+          currentAudioRef.current = audio;
+          const done = () => {
+            URL.revokeObjectURL(url);
+            resolve();
+          };
+          audio.onended = done;
+          audio.onerror = done;
+          audio.play().catch(done);
+        });
+      }
+
+      playing = false;
+      if (inputClosed && playIndex >= pending.length) {
+        isPlayingRef.current = false;
+        onFinished?.();
+      }
+    };
+
+    return {
+      push(sentence: string) {
+        if (!sentence.trim() || controller.signal.aborted) return;
+        pendingText.push(sentence);
+        pending.push(synthesize(sentence));   // synthesis starts immediately
+        void playNext();
+      },
+      finish() {
+        inputClosed = true;
+        if (!playing && playIndex >= pending.length) {
+          isPlayingRef.current = false;
+          onFinished?.();
+        } else {
+          void playNext();
+        }
+      },
+    };
   };
 
   // Voice Speech (TTS)
@@ -470,8 +694,14 @@ export default function ChatPage() {
     // Stop any running speech first
     stopSpeaking();
 
-    // Clean formatting characters to ensure smooth speech flow
-    let cleanText = text.replace(/[*#`_\-]/g, "").trim();
+    // Strip formatting characters, but keep hyphens INSIDE words. The old
+    // pattern removed every hyphen, so "state-of-the-art" became
+    // "stateoftheart" and the TTS model mispronounced it.
+    let cleanText = text
+      .replace(/[*#`]/g, "")
+      .replace(/(^|\s)[-_]+(?=\s|$)/g, "$1")   // standalone dashes only
+      .replace(/_(\w)/g, "$1")                  // markdown emphasis underscores
+      .trim();
     // Clean latex math symbols
     const greekLetters: Record<string, string> = {
       '\\alpha': 'alpha',
@@ -521,58 +751,88 @@ export default function ChatPage() {
       return;
     }
 
-    // Build audio queue items
-    const queue = sentences.map(s => {
-      const url = `http://127.0.0.1:8000/api/v1/chat/tts?text=${encodeURIComponent(s)}`;
-      return { text: s, audio: null as HTMLAudioElement | null, url };
-    });
-
-    audioQueueRef.current = queue;
+    // TTS is now a POST with a JSON body (text no longer leaks into access
+    // logs / browser history via the query string) and requires the tenant
+    // header. Audio elements can't POST, so each sentence is fetched as a
+    // blob and played from an object URL. Prefetch of the next sentence is
+    // preserved; an AbortController cancels everything on interruption.
+    const controller = new AbortController();
+    ttsAbortRef.current = controller;
     isPlayingRef.current = true;
 
-    // Define function to play a specific queue item
-    const playQueueIndex = (index: number) => {
+    const queue = sentences.map(s => ({
+      text: s,
+      urlPromise: null as Promise<string> | null,
+    }));
+
+    const fetchSentenceAudio = async (sentence: string): Promise<string> => {
+      const res = await fetch(`${API_BASE_URL}/api/v1/chat/tts`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Tenant-Id": tenantId,
+        },
+        // Speed is requested at synthesis time so the cloned voice keeps its
+        // pitch and formants, instead of being resampled on playback.
+        body: JSON.stringify({ text: sentence, speed: dynamicSpeed }),
+        signal: controller.signal,
+      });
+      if (!res.ok) throw new Error(`TTS failed (${res.status})`);
+      const blob = await res.blob();
+      return URL.createObjectURL(blob);
+    };
+
+    const ensureFetch = (i: number) => {
+      if (i < queue.length && !queue[i].urlPromise) {
+        queue[i].urlPromise = fetchSentenceAudio(queue[i].text);
+      }
+    };
+
+    const playQueueIndex = async (index: number) => {
       if (!isPlayingRef.current || index >= queue.length) {
         isPlayingRef.current = false;
         if (onSpeechFinished) onSpeechFinished();
         return;
       }
 
-      const item = queue[index];
-      let audio = item.audio;
+      ensureFetch(index);
+      ensureFetch(index + 1); // prefetch next while current plays
 
-      if (!audio) {
-        audio = new Audio(item.url);
-        item.audio = audio;
+      let objectUrl: string;
+      try {
+        objectUrl = await queue[index].urlPromise!;
+      } catch (err) {
+        if (controller.signal.aborted) return; // interrupted — stop quietly
+        console.error("TTS fetch failed for sentence:", queue[index].text, err);
+        playQueueIndex(index + 1);
+        return;
       }
 
-      audio.playbackRate = dynamicSpeed;
+      if (!isPlayingRef.current || controller.signal.aborted) {
+        URL.revokeObjectURL(objectUrl);
+        return;
+      }
+
+      const audio = new Audio(objectUrl);
+      // No playbackRate adjustment: speed was applied during synthesis.
       currentAudioRef.current = audio;
 
       audio.onended = () => {
+        URL.revokeObjectURL(objectUrl);
         playQueueIndex(index + 1);
       };
 
       audio.onerror = (e) => {
-        console.error("Audio playback error for sentence:", item.text, e);
+        console.error("Audio playback error for sentence:", queue[index].text, e);
+        URL.revokeObjectURL(objectUrl);
         playQueueIndex(index + 1);
       };
 
       audio.play().catch(err => {
         console.error("Failed to start audio playback:", err);
+        URL.revokeObjectURL(objectUrl);
         playQueueIndex(index + 1);
       });
-
-      // Pre-fetch next item
-      if (index + 1 < queue.length) {
-        const nextItem = queue[index + 1];
-        if (!nextItem.audio) {
-          const nextAudio = new Audio(nextItem.url);
-          nextAudio.preload = "auto";
-          nextAudio.playbackRate = dynamicSpeed;
-          nextItem.audio = nextAudio;
-        }
-      }
     };
 
     playQueueIndex(0);
@@ -604,12 +864,14 @@ export default function ChatPage() {
     }
 
     setIsLoading(true);
+    setChatError(null);
+    setLastMessage(messageText);
 
-    // Optional Persona prompts injection
-    let payloadMessage = messageText;
-    if (useCatchphrases) {
-      payloadMessage += "\n\n(Persona reminder: Do NOT open with any compliment about the question — no 'Great question', 'That's a thoughtful question', etc. Start with substance. Ground claims in retrieved sources when possible. Use Andrew's natural connectives: 'so', 'actually', 'right?', 'I think'. End with a concrete next step or a targeted comprehension check, never 'does that make sense?')";
-    }
+    // NOTE: no persona reminder is appended here any more. The old inline
+    // reminder polluted the query embedding, full-text search, stored
+    // conversation history AND the knowledge-graph extractor (which mined
+    // triples out of prompt boilerplate). Every rule it contained already
+    // exists verbatim in the server-side persona system prompt.
 
     const updatedMessages = [
       ...activeSession.messages,
@@ -634,45 +896,122 @@ export default function ChatPage() {
         content: m.content
       }));
 
-      const response = await fetch("http://127.0.0.1:8000/api/v1/chat/message", {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        "X-Tenant-Id": tenantId
+      };
+      // Only send the key header when a real key exists. The old code sent
+      // the literal placeholder "AIzaSy...", which triggered the backend's
+      // silent fallback to the server owner's key.
+      if (geminiKey.trim()) {
+        headers["X-Gemini-Api-Key"] = geminiKey.trim();
+      }
+
+      const response = await fetch(`${API_BASE_URL}/api/v1/chat/stream`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Gemini-Api-Key": geminiKey.trim() || "AIzaSy...",
-          "X-Tenant-Id": tenantId
-        },
+        headers,
         body: JSON.stringify({
           session_id: activeSession.id,
-          message: payloadMessage,
+          message: messageText,
           turn_history: turnHistory,
           temperature: 0.2
         })
       });
 
       if (!response.ok) {
-        if (response.status === 429) {
-          throw new Error("Gemini API rate limit reached. Please wait a moment and try again.");
-        }
         const errBody = await response.json().catch(() => null);
         const detail = errBody?.detail || response.statusText;
-        throw new Error(`Server error (${response.status}): ${detail}`);
+        setChatError(classifyError(response.status, detail));
+        // Remove the optimistic user bubble; the notice explains what happened.
+        setSessions((prev) =>
+          prev.map((s) =>
+            s.id === activeSession.id ? { ...s, messages: activeSession.messages } : s
+          )
+        );
+        if (isVoiceActive) setVoiceState("inactive");
+        setIsLoading(false);
+        return;
       }
 
-      const data = await response.json();
-      const assistantText = data.assistant_message;
+      // ── Consume the SSE stream ──────────────────────────────────────────
+      // Text appears as it is generated, and each completed sentence is sent
+      // for synthesis immediately rather than after the whole answer.
+      const shouldSpeak = readAloudEnabled || isVoiceActive;
+      const speaker = shouldSpeak ? createStreamingSpeaker(() => {
+        if (voiceStateRef.current === "speaking") setVoiceState("listening");
+      }) : null;
 
-      if (isVoiceActive) {
-        setVoiceState("speaking");
-        speakText(assistantText, () => {
-          if (voiceStateRef.current === "speaking") {
-            setVoiceState("listening");
+      if (isVoiceActive) setVoiceState("speaking");
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let streamedText = "";
+      let data: Record<string, unknown> = {};
+      let streamError: string | null = null;
+
+      // Placeholder assistant message that fills in as deltas arrive
+      setSessions((prev) =>
+        prev.map((s) =>
+          s.id === activeSession.id
+            ? { ...s, messages: [...updatedMessages, { role: "assistant" as const, content: "" }] }
+            : s
+        )
+      );
+
+      while (reader) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() || "";
+
+        for (const frame of frames) {
+          const eventLine = frame.split("\n").find((l) => l.startsWith("event: "));
+          const dataLine = frame.split("\n").find((l) => l.startsWith("data: "));
+          if (!eventLine || !dataLine) continue;
+
+          const eventType = eventLine.slice(7).trim();
+          let payload: Record<string, unknown>;
+          try {
+            payload = JSON.parse(dataLine.slice(6));
+          } catch {
+            continue;
           }
-        });
-      } else {
-        speakText(assistantText);
+
+          if (eventType === "delta") {
+            streamedText += payload.text as string;
+            setSessions((prev) =>
+              prev.map((s) =>
+                s.id === activeSession.id
+                  ? {
+                      ...s,
+                      messages: [
+                        ...updatedMessages,
+                        { role: "assistant" as const, content: streamedText }
+                      ]
+                    }
+                  : s
+              )
+            );
+          } else if (eventType === "sentence") {
+            speaker?.push(payload.text as string);
+          } else if (eventType === "meta") {
+            data = { ...data, ...payload };
+          } else if (eventType === "done") {
+            data = { ...data, ...payload };
+          } else if (eventType === "error") {
+            streamError = payload.detail as string;
+          }
+        }
       }
 
-      const rawGraph: any[] = data.graph_context || [];
+      speaker?.finish();
+      if (streamError) throw new Error(streamError);
+
+      const assistantText = (data.assistant_message as string) || streamedText;
+      const rawGraph: GraphContextNode[] = (data.graph_context as GraphContextNode[]) || [];
       const updatedTriplets: TripletRow[] = rawGraph.map((node) => ({
         node_id: node.node_id,
         canonical_name: node.canonical_name,
@@ -692,11 +1031,19 @@ export default function ChatPage() {
                 ...s,
                 messages: [
                   ...updatedMessages,
-                  { 
-                    role: "assistant" as const, 
+                  {
+                    role: "assistant" as const,
                     content: assistantText,
-                    cacheStatus: data.cache_status,
-                    retrievedChunks: data.retrieved_chunks
+                    cacheStatus: data.cache_status as string,
+                    cachedTokenCount: data.cached_token_count as number,
+                    isGrounded: data.is_grounded as boolean,
+                    retrievedChunks: data.retrieved_chunks as RetrievedChunk[],
+                    // Concepts the graph contributed, so recall can be shown
+                    // inline at the moment it happened.
+                    recalled: ((data.graph_context as GraphContextNode[]) || [])
+                      .filter((n) => n.node_type === "Concept" && n.hop_distance > 0)
+                      .slice(0, 3)
+                      .map((n) => n.canonical_name)
                   }
                 ],
                 // Merge new graph nodes with existing (don't drop edges).
@@ -713,37 +1060,31 @@ export default function ChatPage() {
         )
       );
 
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(err);
-      if (isVoiceActive) {
-        setVoiceState("inactive");
-      }
+      const message = err instanceof Error ? err.message : "Unknown error";
+      if (isVoiceActive) setVoiceState("inactive");
+      // A network failure has no HTTP status, which classifyError reads as offline.
+      setChatError(classifyError(null, message));
       setSessions((prev) =>
         prev.map((s) =>
-          s.id === activeSession.id
-            ? {
-                ...s,
-                messages: [
-                  ...updatedMessages,
-                  { role: "assistant" as const, content: `Error communicating with backend: ${err.message}.` }
-                ]
-              }
-            : s
+          s.id === activeSession.id ? { ...s, messages: activeSession.messages } : s
         )
       );
     } finally {
       setIsLoading(false);
-      // Automatically refresh the knowledge graph after delays
-      // to allow the background extraction task to complete in the database.
-      setTimeout(() => {
-        handleSyncGraph();
-      }, 5000);
-      // Second refresh to catch slower extractions
-      setTimeout(() => {
-        handleSyncGraph();
-      }, 12000);
+      // Wait for graph extraction to actually finish, instead of guessing with
+      // blind 5s and 12s timers that either fired too early or wasted a
+      // request after the work was already done.
+      void waitForGraphExtraction(activeSession.id);
     }
   };
+
+  // Keep the ref pointing at the freshest closure every render, so the
+  // once-registered speech-recognition callbacks never act on stale state.
+  useEffect(() => {
+    submitRef.current = submitDialogueMessage;
+  });
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -756,87 +1097,130 @@ export default function ChatPage() {
   // Old handleSyncGraph location removed (moved to top of file)
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden text-[#111827] bg-[#F7F8FA] p-4 gap-4">
+    <div className="flex flex-col lg:flex-row h-[100dvh] w-full overflow-hidden text-[var(--text)] bg-[var(--bg)] p-2 sm:p-4 gap-2 sm:gap-4">
       
       {/* ──────────────────────────────────────────────────
           1. SIDEBAR (Left panel)
           ────────────────────────────────────────────────── */}
-      <div className="w-80 bg-white border border-[#E5E7EB] rounded-2xl shadow-sm flex flex-col overflow-hidden">
+      <div
+        className={`${mobilePanel === "sessions" ? "flex" : "hidden"} lg:flex
+          absolute lg:relative inset-2 lg:inset-auto z-30 lg:z-auto
+          w-auto lg:w-80 lg:flex-shrink-0
+          bg-[var(--surface)] border border-[var(--border)] rounded-2xl shadow-lg lg:shadow-sm
+          flex-col overflow-hidden`}
+      >
         
         {/* Header / Logo */}
-        <div className="p-5 border-b border-[#E5E7EB] flex items-center gap-3">
-          <BookOpen className="text-[#1A56DB] w-5 h-5" />
-          <div>
-            <h1 className="font-semibold text-[14px] text-[#111827]">Andrew Ng</h1>
-            <p className="text-[11px] text-[#6B7280] font-normal tracking-[0.07em]">Digital twin</p>
+        <div className="p-5 border-b border-[var(--border)] flex items-center gap-3">
+          <BookOpen className="text-[var(--accent)] w-5 h-5 flex-shrink-0" />
+          <div className="min-w-0 flex-1">
+            <h1 className="font-semibold text-[14px] text-[var(--text)]">Andrew Ng</h1>
+            <p className="text-[11px] text-[var(--text-muted)] font-normal tracking-[0.07em]">
+              Unofficial AI recreation, for learning
+            </p>
           </div>
-        </div>
-
-        {/* API Settings */}
-        <div className="p-4 border-b border-[#E5E7EB] flex flex-col gap-3">
-          <label className="text-[11px] font-medium text-[#6B7280] tracking-[0.07em] flex items-center gap-1.5">
-            <Key className="w-4 h-4 text-[#1A56DB]" />
-            Developer API key
-          </label>
-          <input
-            type="password"
-            placeholder="AIzaSy..."
-            value={geminiKey}
-            onChange={(e) => handleSaveKey(e.target.value)}
-            className="w-full bg-[#FFFFFF] border border-[#E5E7EB] text-[13px] px-3 py-2 rounded-lg text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:border-[#1A56DB] focus:ring-1 focus:ring-[#1A56DB] transition"
-          />
-        </div>
-
-        {/* Twin Dialectics / Pedagogical Settings */}
-        <div className="p-4 border-b border-[#E5E7EB] flex flex-col gap-3">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-medium text-[#6B7280] tracking-[0.07em] flex items-center gap-1.5">
-              <Sliders className="w-4 h-4 text-[#1A56DB]" />
-              Pedagogical voice
-            </span>
-          </div>
-          <div className="flex flex-col gap-2">
-            <label className="text-[12px] text-[#6B7280] font-normal flex justify-between">
-              <span>Speech rate:</span>
-              <span className="text-[#1A56DB] font-medium">{ttsSpeed.toFixed(2)}x</span>
-            </label>
-            <input
-              type="range"
-              min="0.8"
-              max="1.5"
-              step="0.05"
-              value={ttsSpeed}
-              onChange={(e) => setTtsSpeed(parseFloat(e.target.value))}
-              className="w-full h-1 bg-[#E5E7EB] rounded-lg appearance-none cursor-pointer accent-[#1A56DB]"
-            />
-          </div>
-        </div>
-
-        {/* Memory Management */}
-        <div className="p-4 border-b border-[#E5E7EB] flex flex-col gap-3">
-          <label className="text-[11px] font-medium text-[#6B7280] tracking-[0.07em] flex items-center gap-1.5">
-            <Cpu className="w-4 h-4 text-[#1A56DB]" />
-            Memory management
-          </label>
           <button
-            onClick={handleResetMemory}
-            className="w-full border border-red-200 hover:bg-red-50 text-red-600 font-medium text-[13px] py-2.5 rounded-lg flex items-center justify-center gap-2 transition"
+            onClick={() => setMobilePanel("chat")}
+            className="lg:hidden p-1.5 rounded-lg border border-[var(--border)] text-[var(--text-muted)] hover:bg-[var(--bg)]"
+            aria-label="Close conversations"
           >
-            <Trash2 className="w-4 h-4" />
-            Reset learning memory
+            <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* New Chat Action */}
+        {/* Primary action first. The old order put a developer API key field
+            and a destructive reset above the button that starts a
+            conversation, which is the build order of the backend rather than
+            the priority of the person using it. */}
         <div className="p-4">
           <button
             onClick={handleNewChat}
-            className="w-full bg-[#1A56DB] hover:bg-[#1A56DB]/90 text-white font-medium text-[13px] py-2.5 rounded-lg flex items-center justify-center gap-2 transition shadow-sm"
+            className="w-full bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-text)] font-medium text-[13px] py-2.5 rounded-lg flex items-center justify-center gap-2 transition shadow-sm"
           >
             <Plus className="w-4 h-4" />
             New conversation
           </button>
         </div>
+
+        {/* Settings, collapsed by default. Touched once (the key) or rarely
+            (speech rate, reset), so they do not deserve permanent space. */}
+        <div className="px-4 pb-2">
+          <button
+            onClick={() => setSettingsOpen((v) => !v)}
+            aria-expanded={settingsOpen}
+            aria-controls="settings-panel"
+            className="w-full flex items-center justify-between text-[12px] text-[var(--text-muted)] hover:text-[var(--text)] py-1.5 transition"
+          >
+            <span className="flex items-center gap-1.5">
+              <Sliders className="w-3.5 h-3.5" />
+              Settings
+            </span>
+            <span className="flex items-center gap-1.5">
+              {!geminiKey.trim() && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded-full border"
+                      style={{ background: "var(--warn-soft)", borderColor: "var(--warn-border)", color: "var(--warn)" }}>
+                  key needed
+                </span>
+              )}
+              <ChevronDown className={`w-3.5 h-3.5 transition-transform ${settingsOpen ? "rotate-180" : ""}`} />
+            </span>
+          </button>
+        </div>
+
+        {settingsOpen && (
+          <div id="settings-panel" className="px-4 pb-4 flex flex-col gap-4 border-b border-[var(--border)]">
+            <div className="flex flex-col gap-2">
+              <label htmlFor="gemini-key" className="text-[11px] font-medium text-[var(--text-muted)] flex items-center gap-1.5">
+                <Key className="w-3.5 h-3.5 text-[var(--accent)]" />
+                Your Gemini API key
+              </label>
+              <input
+                id="gemini-key"
+                type="password"
+                placeholder="Paste your key"
+                value={geminiKey}
+                onChange={(e) => handleSaveKey(e.target.value)}
+                aria-describedby="gemini-key-help"
+                className="w-full bg-[var(--surface)] border text-[13px] px-3 py-2 rounded-lg text-[var(--text)] placeholder-[var(--text-subtle)] focus:outline-none focus:border-[var(--accent)] transition"
+                style={{ borderColor: geminiKey.trim() ? "var(--ok)" : "var(--border)" }}
+              />
+              {/* The field previously gave no feedback at all: nothing told the
+                  user whether a key was saved, and an invalid one surfaced
+                  minutes later as a generic 502. */}
+              <p id="gemini-key-help" className="text-[11px] text-[var(--text-muted)] leading-snug">
+                {geminiKey.trim()
+                  ? "Saved for this browser tab only. Never sent to our server."
+                  : "Get one free at aistudio.google.com. It stays in this browser."}
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <label htmlFor="speech-rate" className="text-[11px] text-[var(--text-muted)] font-medium flex justify-between">
+                <span>Speaking speed</span>
+                <span className="text-[var(--accent)]">{ttsSpeed.toFixed(2)}x</span>
+              </label>
+              <input
+                id="speech-rate"
+                type="range"
+                min="0.8"
+                max="1.5"
+                step="0.05"
+                value={ttsSpeed}
+                onChange={(e) => setTtsSpeed(parseFloat(e.target.value))}
+                className="w-full h-1 bg-[var(--border)] rounded-lg appearance-none cursor-pointer accent-[var(--accent)]"
+              />
+            </div>
+
+            <button
+              onClick={handleResetMemory}
+              className="w-full border text-[13px] py-2 rounded-lg flex items-center justify-center gap-2 transition"
+              style={{ borderColor: "var(--danger-border)", color: "var(--danger)" }}
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              Forget everything about me
+            </button>
+          </div>
+        )}
 
         {/* Session List */}
         <div className="flex-1 overflow-y-auto px-3 py-2 flex flex-col gap-1.5">
@@ -847,16 +1231,23 @@ export default function ChatPage() {
                 key={session.id}
                 onClick={() => {
                   setActiveSessionId(session.id);
+                  localStorage.setItem(KEY_LOCAL_STORAGE_ACTIVE, session.id);
+                  setMobilePanel("chat");
                   stopSpeaking();
+                  // Transcripts load lazily, so fetch on first open.
+                  if (session.messages.length === 0) {
+                    void loadSessionMessages(session.id);
+                  }
                 }}
                 className={`group px-3 py-2.5 rounded-lg cursor-pointer flex items-center justify-between transition ${
-                  isActive ? "bg-[#E8EEFB] border border-[#E5E7EB] text-[#1A56DB]" : "hover:bg-[#F7F8FA] text-[#6B7280] hover:text-[#111827]"
+                  isActive ? "bg-[var(--accent-soft)] border border-[var(--border)] text-[var(--accent)]" : "hover:bg-[var(--bg)] text-[var(--text-muted)] hover:text-[var(--text)]"
                 }`}
               >
                 <span className="text-[13px] font-normal truncate max-w-[160px]">{session.title}</span>
                 <button
                   onClick={(e) => handleDeleteChat(session.id, e)}
-                  className="opacity-0 group-hover:opacity-100 p-1 text-[#6B7280] hover:text-red-500 transition"
+                  aria-label={`Delete conversation: ${session.title}`}
+                  className="opacity-0 group-hover:opacity-100 p-1 text-[var(--text-muted)] hover:text-red-500 transition"
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -869,22 +1260,48 @@ export default function ChatPage() {
       {/* ──────────────────────────────────────────────────
           2. CENTRAL PANEL (Chat bubbles window)
           ────────────────────────────────────────────────── */}
-      <div className="flex-1 bg-white border border-[#E5E7EB] rounded-2xl shadow-sm flex flex-col overflow-hidden">
+      <div className="flex-1 min-w-0 bg-[var(--surface)] border border-[var(--border)] rounded-2xl shadow-sm flex flex-col overflow-hidden">
         
         {/* Top bar with Online status */}
-        <div className="h-16 border-b border-[#E5E7EB] px-6 flex items-center justify-between bg-white">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-full bg-[#1A56DB] text-white flex items-center justify-center font-semibold text-[14px]">AN</div>
-            <div>
-              <h2 className="text-[14px] font-medium text-[#111827]">Andrew Ng</h2>
+        <div className="h-16 border-b border-[var(--border)] px-3 sm:px-6 flex items-center justify-between bg-[var(--surface)]">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            {/* Drawer toggle, mobile only */}
+            <button
+              onClick={() => setMobilePanel("sessions")}
+              className="lg:hidden p-2 -ml-1 rounded-lg border border-[var(--border)] text-[var(--text-muted)] hover:bg-[var(--bg)]"
+              aria-label="Show conversations"
+            >
+              <Menu className="w-4 h-4" />
+            </button>
+            <div className="w-8 h-8 rounded-full bg-[var(--accent)] text-[var(--accent-text)] flex items-center justify-center font-semibold text-[14px] flex-shrink-0">AN</div>
+            <div className="min-w-0">
+              <h2 className="text-[14px] font-medium text-[var(--text)] truncate">Andrew Ng</h2>
               <span className="text-[11px] text-green-600 font-normal flex items-center gap-1">
                 <span className="w-1.5 h-1.5 rounded-full bg-green-600 animate-pulse" />
-                Grounded twin • Online
+                <span className="truncate">Grounded twin</span>
               </span>
             </div>
           </div>
-          
-          <div className="flex items-center gap-3">
+
+          <div className="flex items-center gap-2 sm:gap-3">
+            {/* Graph drawer toggle, mobile only */}
+            <button
+              onClick={() => setMobilePanel("graph")}
+              className="lg:hidden p-2 rounded-lg border border-[var(--border)] text-[var(--text-muted)] hover:bg-[var(--bg)]"
+              aria-label="Show memory graph"
+            >
+              <Cpu className="w-4 h-4" />
+            </button>
+            {/* Theme toggle. Students working at night are a core audience. */}
+            <button
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+              aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+              title={theme === "dark" ? "Light theme" : "Dark theme"}
+              className="p-2 rounded-lg border border-[var(--border)] text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--surface-hover)] transition"
+            >
+              {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+            </button>
+
             {/* Read aloud toggle */}
             <button
               onClick={() => {
@@ -893,10 +1310,10 @@ export default function ChatPage() {
               }}
               className={`p-2 rounded-lg border transition ${
                 readAloudEnabled
-                  ? "bg-[#E8EEFB] border-[#D1D5DB] text-[#1A56DB]"
-                  : "border-[#E5E7EB] text-[#6B7280] hover:text-[#111827] hover:bg-[#F7F8FA]"
+                  ? "bg-[var(--accent-soft)] border-[var(--border-strong)] text-[var(--accent)]"
+                  : "border-[var(--border)] text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--bg)]"
               }`}
-              title="Toggle read aloud"
+              title="Toggle read aloud" aria-label="Toggle read aloud" aria-pressed={readAloudEnabled}
             >
               <Volume2 className="w-4 h-4" />
             </button>
@@ -904,78 +1321,149 @@ export default function ChatPage() {
         </div>
 
         {/* Dialogue history scroll bubble */}
-        <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-6">
+        <div className="flex-1 overflow-y-auto p-3 sm:p-6 flex flex-col gap-4 sm:gap-6" role="log" aria-label="Conversation">
           {activeSession?.messages.map((msg, index) => {
             const isUser = msg.role === "user";
             return (
               <div
                 key={index}
-                className={`flex gap-4 max-w-3xl ${isUser ? "ml-auto flex-row-reverse" : ""}`}
+                className={`flex gap-2 sm:gap-4 max-w-full sm:max-w-3xl min-w-0 ${isUser ? "ml-auto flex-row-reverse" : ""}`}
               >
                 {/* Avatar */}
                 <div
                   className={`w-8 h-8 rounded-full flex items-center justify-center font-medium text-[13px] flex-shrink-0 ${
-                    isUser ? "bg-[#6B7280] text-white" : "bg-[#1A56DB] text-white"
+                    isUser ? "bg-[var(--text-muted)] text-[var(--accent-text)]" : "bg-[var(--accent)] text-[var(--accent-text)]"
                   }`}
                 >
                   {isUser ? "S" : "AN"}
                 </div>
                 
                 {/* Message Box */}
-                <div className={`flex flex-col gap-3 p-4 rounded-2xl text-[13px] leading-relaxed border whitespace-pre-wrap ${
-                  isUser ? "border-[#E5E7EB] bg-[#F7F8FA] text-[#111827]" : "border-[#E5E7EB] bg-white text-[#111827] shadow-sm"
+                <div className={`flex flex-col gap-3 p-3 sm:p-4 rounded-2xl text-[13px] leading-relaxed border min-w-0 break-words ${
+                  isUser ? "border-[var(--border)] bg-[var(--bg)] text-[var(--text)]" : "border-[var(--border)] bg-[var(--surface)] text-[var(--text)] shadow-sm"
                 }`}>
-                  <div className="w-full">{formatMessageContent(msg.content)}</div>
+                  <div className="w-full min-w-0"><MessageContent content={msg.content} /></div>
 
-                  {/* Cache Status Badge */}
-                  {!isUser && msg.cacheStatus && (
-                    <div className="flex items-center gap-1.5 text-[11px] font-normal mt-1">
-                      {msg.cacheStatus === "hit" ? (
-                        <span className="flex items-center gap-0.5 text-cyan-800 bg-cyan-50 px-2 py-0.5 rounded-full border border-cyan-200">
-                          <Zap className="w-3 h-3 fill-cyan-700 text-cyan-700" />
-                          Context cache hit (saved tokens)
-                        </span>
-                      ) : msg.cacheStatus === "miss" ? (
-                        <span className="text-[#6B7280] bg-[#F7F8FA] px-2 py-0.5 rounded-full border border-[#E5E7EB]">
-                          Context cache miss (cold session)
-                        </span>
-                      ) : null}
+                  {/* Ambient memory. Shown above the answer because it is
+                      context for what follows, not a footnote about it. */}
+                  {!isUser && msg.recalled && msg.recalled.length > 0 && (
+                    <div className="flex items-start gap-1.5 text-[12px] text-[var(--text-muted)] -mt-1">
+                      <Sparkles className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-[var(--accent)]" />
+                      <span>
+                        Building on what we covered before: {msg.recalled.join(", ")}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Grounding notice — shown when the corpus did not really
+                      cover the question, so the answer is general expertise
+                      rather than something Andrew wrote about. */}
+                  {!isUser && msg.isGrounded === false && (
+                    <div className="flex items-start gap-1.5 text-[11px] text-amber-800 bg-amber-50 border border-amber-200 px-2.5 py-1.5 rounded-lg mt-1">
+                      <span>
+                        Outside Andrew&apos;s written material. This answer is his general
+                        perspective rather than a grounded citation.
+                      </span>
                     </div>
                   )}
 
                   {/* Citation Badges */}
                   {!isUser && msg.retrievedChunks && msg.retrievedChunks.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 mt-2 border-t border-[#E5E7EB] pt-2">
-                      <span className="text-[11px] text-[#6B7280] font-medium block w-full">Grounding sources:</span>
+                    <div className="flex flex-wrap gap-1.5 mt-2 border-t border-[var(--border)] pt-2">
+                      <span className="text-[11px] text-[var(--text-muted)] font-medium block w-full">
+                        {msg.isGrounded === false ? "Closest material:" : "From Andrew's materials:"}
+                      </span>
                       {msg.retrievedChunks.slice(0, 3).map((chunk, cIdx) => (
                         <span
                           key={cIdx}
-                          title={`Score: ${chunk.final_score.toFixed(4)}`}
-                          className="text-[11px] text-[#1A56DB] hover:text-[#1A56DB]/80 bg-[#E8EEFB] px-2 py-1 rounded-lg border border-[#E5E7EB] max-w-[180px] truncate cursor-help flex items-center gap-1"
+                          title={chunk.chunk_text ? `${chunk.chunk_text.slice(0, 300)}…` : `Score: ${chunk.final_score.toFixed(4)}`}
+                          className="text-[11px] text-[var(--accent)] hover:text-[var(--accent)]/80 bg-[var(--accent-soft)] px-2 py-1 rounded-lg border border-[var(--border)] max-w-[180px] truncate cursor-help flex items-center gap-1"
                         >
-                          <BookOpen className="w-3 h-3 text-[#1A56DB] flex-shrink-0" />
+                          <BookOpen className="w-3 h-3 text-[var(--accent)] flex-shrink-0" />
                           {chunk.source_file.replace(/_/g, " ").replace(".txt", "")}
                         </span>
                       ))}
+                    </div>
+                  )}
+
+                  {/* Cache telemetry — real cached-token count from Gemini
+                      usage metadata, not an inference from object age. */}
+                  {!isUser && (msg.cachedTokenCount ?? 0) > 0 && (
+                    <div className="flex items-center gap-1.5 text-[11px] font-normal mt-1">
+                      <span className="flex items-center gap-0.5 text-cyan-800 bg-cyan-50 px-2 py-0.5 rounded-full border border-cyan-200">
+                        <Zap className="w-3 h-3 fill-cyan-700 text-cyan-700" />
+                        {msg.cachedTokenCount?.toLocaleString()} tokens served from cache
+                      </span>
                     </div>
                   )}
                 </div>
               </div>
             );
           })}
-          {isLoading && (
-            <div className="flex gap-4 max-w-3xl loading-glow">
-              <div className="w-8 h-8 rounded-full bg-[#1A56DB] text-white flex items-center justify-center font-medium text-[13px]">AN</div>
-              <div className="p-4 rounded-2xl text-[13px] border border-[#E5E7EB] bg-white text-[#111827] shadow-sm">
-                Thinking...
+          {/* Waiting state, only until the first token lands. Once the stream
+              starts the partial answer is itself the indicator, which is why
+              a static "Thinking..." for a 5 to 20 second wait read as a hang. */}
+          {isLoading && !hasStreamingText && (
+            <div className="flex gap-2 sm:gap-4 max-w-3xl">
+              <div className="w-8 h-8 rounded-full bg-[var(--accent)] text-[var(--accent-text)] flex items-center justify-center font-medium text-[13px] flex-shrink-0">
+                AN
+              </div>
+              <div className="px-4 py-3 rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-sm flex items-center gap-1.5">
+                <span className="typing-dot" />
+                <span className="typing-dot" />
+                <span className="typing-dot" />
+                <span className="sr-only">Andrew is composing a reply</span>
               </div>
             </div>
           )}
+
+          {/* Failures get their own treatment instead of being spoken by the
+              tutor in character. */}
+          {chatError && (
+            <div className="max-w-3xl">
+              <ErrorNotice
+                error={chatError}
+                onOpenSettings={() => { setSettingsOpen(true); setMobilePanel("sessions"); }}
+                onRetry={() => { const m = lastMessage; setChatError(null); if (m) void submitDialogueMessage(m); }}
+                onDismiss={() => setChatError(null)}
+              />
+            </div>
+          )}
+
+          {/* Suggested openers on an untouched conversation. A first-time
+              visitor previously had no indication of what this is good at. */}
+          {showSuggestions && (
+            <div className="max-w-3xl">
+              <p className="text-[12px] text-[var(--text-muted)] mb-2">Try asking:</p>
+              <div className="flex flex-wrap gap-2">
+                {SUGGESTED_QUESTIONS.map((q) => (
+                  <button
+                    key={q}
+                    onClick={() => void submitDialogueMessage(q)}
+                    className="text-left text-[13px] px-3 py-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] transition"
+                  >
+                    {q}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Announces status changes to assistive tech. Polite so it waits
+              for a pause rather than interrupting. */}
+          <div aria-live="polite" aria-atomic="true" className="sr-only">
+            {isLoading
+              ? "Andrew is composing a reply"
+              : lastMsg?.role === "assistant"
+                ? `Andrew replied: ${lastMsg.content.slice(0, 200)}`
+                : ""}
+          </div>
+
           <div ref={chatBottomRef} />
         </div>
 
         {/* Input box */}
-        <div className="p-6 border-t border-[#E5E7EB] flex flex-col gap-3">
+        <div className="p-3 sm:p-6 border-t border-[var(--border)] flex flex-col gap-3">
           
 
 
@@ -987,25 +1475,28 @@ export default function ChatPage() {
                 onChange={(e) => setUserInput(e.target.value)}
                 placeholder={isRecording ? "Listening..." : "Ask Andrew a question about ML models..."}
                 disabled={isLoading}
-                className="w-full bg-white border border-[#E5E7EB] text-[13px] px-4 py-3.5 pr-20 rounded-xl focus:outline-none focus:border-[#1A56DB] focus:ring-1 focus:ring-[#1A56DB] text-[#111827] placeholder-[#9CA3AF] transition"
+                className="w-full bg-[var(--surface)] border border-[var(--border)] text-[13px] px-4 py-3.5 pr-20 rounded-xl focus:outline-none focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)] text-[var(--text)] placeholder-[var(--text-subtle)] transition"
               />
               <button
                 type="button"
                 onClick={() => {
                   setVoiceState("listening");
                 }}
-                className="absolute right-10 top-3.5 text-[#6B7280] hover:text-[#1A56DB] transition animate-pulse"
-                title="Start voice dialogue mode"
+                className="absolute right-10 top-3.5 text-[var(--text-muted)] hover:text-[var(--accent)] transition"
+                title="Start voice dialogue mode" aria-label="Start hands-free voice conversation"
               >
                 <Headphones className="w-4 h-4" />
               </button>
               <button
                 type="button"
                 onClick={handleToggleRecording}
+                disabled={isLoading}
                 className={`absolute right-3 top-3.5 transition ${
-                  isRecording ? "text-red-500 hover:text-red-700" : "text-[#6B7280] hover:text-[#1A56DB]"
+                  isRecording ? "text-red-500 hover:text-red-700" : "text-[var(--text-muted)] hover:text-[var(--accent)]"
                 }`}
                 title={isRecording ? "Stop recording" : "Record voice input"}
+                aria-label={isRecording ? "Stop recording" : "Record voice input"}
+                aria-pressed={isRecording}
               >
                 {isRecording ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
               </button>
@@ -1014,7 +1505,8 @@ export default function ChatPage() {
             <button
               type="submit"
               disabled={isLoading}
-              className="bg-[#1A56DB] hover:bg-[#1A56DB]/90 disabled:opacity-50 text-white p-3.5 rounded-xl flex items-center justify-center transition shadow-sm"
+              aria-label="Send message"
+              className="bg-[var(--accent)] hover:bg-[var(--accent)]/90 disabled:opacity-50 text-[var(--accent-text)] p-3.5 rounded-xl flex items-center justify-center transition shadow-sm"
             >
               <Send className="w-4 h-4" />
             </button>
@@ -1025,24 +1517,37 @@ export default function ChatPage() {
       {/* ──────────────────────────────────────────────────
           3. GRAPH MEMORY MATRIX (Right panel)
           ────────────────────────────────────────────────── */}
-      <div className="w-[480px] bg-white border border-[#E5E7EB] rounded-2xl shadow-sm flex flex-col overflow-hidden">
+      <div
+        className={`${mobilePanel === "graph" ? "flex" : "hidden"} lg:flex
+          absolute lg:relative inset-2 lg:inset-auto z-30 lg:z-auto
+          w-auto lg:w-[420px] xl:w-[480px] lg:flex-shrink-0
+          bg-[var(--surface)] border border-[var(--border)] rounded-2xl shadow-lg lg:shadow-sm
+          flex-col overflow-hidden`}
+      >
         
         {/* Header with Sync buttons & View Toggle */}
-        <div className="p-4 border-b border-[#E5E7EB] flex items-center justify-between bg-white">
+        <div className="p-4 border-b border-[var(--border)] flex items-center justify-between bg-[var(--surface)]">
           <div className="flex items-center gap-2">
-            <Cpu className="text-[#1A56DB] w-4 h-4" />
-            <h2 className="text-[14px] font-medium text-[#111827]">Memory matrix</h2>
+            <button
+              onClick={() => setMobilePanel("chat")}
+              className="lg:hidden p-1.5 -ml-1 rounded-lg border border-[var(--border)] text-[var(--text-muted)] hover:bg-[var(--bg)]"
+              aria-label="Close memory graph"
+            >
+              <X className="w-4 h-4" />
+            </button>
+            <Cpu className="text-[var(--accent)] w-4 h-4" />
+            <h2 className="text-[14px] font-medium text-[var(--text)]">What I know about you</h2>
           </div>
           
           {/* Segment control toggle & Sync button */}
           <div className="flex items-center gap-3">
-            <div className="flex bg-[#F3F4F6] p-0.5 rounded-lg border border-[#E5E7EB]">
+            <div className="flex bg-[var(--surface-alt)] p-0.5 rounded-lg border border-[var(--border)]">
               <button
                 onClick={() => setGraphView("session")}
                 className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-all ${
                   graphView === "session"
-                    ? "bg-white text-[#111827] shadow-sm"
-                    : "text-[#6B7280] hover:text-[#111827]"
+                    ? "bg-[var(--surface)] text-[var(--text)] shadow-sm"
+                    : "text-[var(--text-muted)] hover:text-[var(--text)]"
                 }`}
               >
                 Active Chat
@@ -1051,8 +1556,8 @@ export default function ChatPage() {
                 onClick={() => setGraphView("global")}
                 className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-all ${
                   graphView === "global"
-                    ? "bg-white text-[#111827] shadow-sm"
-                    : "text-[#6B7280] hover:text-[#111827]"
+                    ? "bg-[var(--surface)] text-[var(--text)] shadow-sm"
+                    : "text-[var(--text-muted)] hover:text-[var(--text)]"
                 }`}
               >
                 Global Map
@@ -1062,8 +1567,8 @@ export default function ChatPage() {
             <button
               onClick={() => handleSyncGraph(graphView)}
               disabled={isSyncingGraph}
-              className="p-1.5 rounded-lg border border-[#E5E7EB] hover:bg-[#F7F8FA] text-[#6B7280] transition"
-              title="Refresh knowledge graph"
+              className="p-1.5 rounded-lg border border-[var(--border)] hover:bg-[var(--bg)] text-[var(--text-muted)] transition"
+              title="Refresh knowledge graph" aria-label="Refresh what I know about you"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isSyncingGraph ? "animate-spin" : ""}`} />
             </button>
@@ -1090,18 +1595,19 @@ export default function ChatPage() {
           4. INTERACTIVE VOICE OVERLAY (Glass modal)
           ────────────────────────────────────────────────── */}
       {voiceState !== "inactive" && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 backdrop-blur-sm transition-all duration-300">
+        <div role="dialog" aria-modal="true" aria-label="Voice conversation" className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm transition-all duration-300">
           
-          <div className="relative max-w-[400px] w-full bg-white rounded-2xl border border-slate-200 shadow-2xl p-10 flex flex-col items-center">
+          <div className="relative max-w-[400px] w-full bg-[var(--surface)] rounded-2xl border border-[var(--border)] shadow-2xl p-10 flex flex-col items-center">
             
             {/* Sleek Ghost Close Button inside card top-right */}
             <button
+              ref={voiceCloseRef}
               onClick={() => {
                 stopSpeaking();
                 setVoiceState("inactive");
               }}
-              className="absolute top-4 right-4 w-7 h-7 flex items-center justify-center rounded-full border border-slate-200 hover:bg-slate-100 text-slate-500 hover:text-slate-700 transition cursor-pointer"
-              title="Exit Voice Mode"
+              className="absolute top-4 right-4 w-7 h-7 flex items-center justify-center rounded-full border border-[var(--border)] hover:bg-[var(--surface-hover)] text-[var(--text-muted)] hover:text-[var(--text)] transition cursor-pointer"
+              title="Exit voice mode" aria-label="Exit voice mode"
             >
               <X className="w-4 h-4" />
             </button>
@@ -1133,28 +1639,28 @@ export default function ChatPage() {
                   setVoiceState("inactive");
                 }
               }}
-              className="px-6 py-2.5 bg-[#1A56DB] hover:bg-[#1A56DB]/90 text-white rounded-full text-[13px] font-medium mb-6 transition"
+              className="px-6 py-2.5 bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-[var(--accent-text)] rounded-full text-[13px] font-medium mb-6 transition"
             >
               {voiceState === "listening" ? "Stop listening" : "Tap to interrupt"}
             </button>
 
             {/* Voice Status Text */}
-            <p className="text-[13px] text-[#6B7280] font-normal mb-6 text-center capitalize">
+            <p className="text-[13px] text-[var(--text-muted)] font-normal mb-6 text-center capitalize">
               {voiceState}...
             </p>
 
             {/* Speed controller inside voice modal */}
-            <div className="flex items-center gap-3 bg-[#F7F8FA] border border-[#E5E7EB] px-3 py-1.5 rounded-full">
+            <div className="flex items-center gap-3 bg-[var(--bg)] border border-[var(--border)] px-3 py-1.5 rounded-full">
               <button
                 onClick={() => setTtsSpeed(prev => Math.max(0.8, prev - 0.1))}
-                className="text-xs text-[#6B7280] hover:text-[#111827] px-1 font-bold cursor-pointer"
+                className="text-xs text-[var(--text-muted)] hover:text-[var(--text)] px-1 font-bold cursor-pointer"
               >
                 -
               </button>
-              <span className="text-[12px] text-[#1A56DB] font-medium min-w-[32px] text-center">{ttsSpeed.toFixed(1)}x</span>
+              <span className="text-[12px] text-[var(--accent)] font-medium min-w-[32px] text-center">{ttsSpeed.toFixed(1)}x</span>
               <button
                 onClick={() => setTtsSpeed(prev => Math.min(1.5, prev + 0.1))}
-                className="text-xs text-[#6B7280] hover:text-[#111827] px-1 font-bold cursor-pointer"
+                className="text-xs text-[var(--text-muted)] hover:text-[var(--text)] px-1 font-bold cursor-pointer"
               >
                 +
               </button>

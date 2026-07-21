@@ -4,7 +4,7 @@
 // These types flow from: Supabase SQL → Python API → TypeScript → React Flow
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { Node, Edge, NodeTypes } from "@xyflow/react";
+import type { Node, Edge } from "@xyflow/react";
 
 // ── Raw API response types (from FastAPI) ────────────────────────────────────
 

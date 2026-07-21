@@ -29,7 +29,6 @@ import { NODE_TYPE_COLORS, PREDICATE_COLORS } from "../types/graph";
 // ── Layout constants ──────────────────────────────────────────────────────────
 const LAYOUT_WIDTH  = 800;
 const LAYOUT_HEIGHT = 600;
-const NODE_RADIUS   = 60;   // repulsion radius for force simulation
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN MAPPER FUNCTION
@@ -317,10 +316,6 @@ function applyForceLayout(
 /**
  * Map combined_score (0-1) to a node diameter in pixels (40–80px).
  */
-function nodeSize(score: number): number {
-  return Math.round(40 + score * 40);
-}
-
 /**
  * Convert predicate snake_case to readable label.
  * e.g. "struggles_with" → "struggles with"
@@ -333,16 +328,6 @@ function formatPredicate(predicate: string): string {
  * Lighten a hex color by a factor (0-1) — used for node border glow.
  * Quick implementation without a full color library.
  */
-function lighten(hex: string, factor: number): string {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  const lerp = (v: number) => Math.min(255, Math.round(v + (255 - v) * factor));
-  return `#${lerp(r).toString(16).padStart(2, "0")}${
-    lerp(g).toString(16).padStart(2, "0")
-  }${lerp(b).toString(16).padStart(2, "0")}`;
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // INCREMENTAL UPDATE HELPER
 // ─────────────────────────────────────────────────────────────────────────────
