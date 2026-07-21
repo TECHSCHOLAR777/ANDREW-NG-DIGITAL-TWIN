@@ -12,6 +12,19 @@ AGENTS.md
 **/CLAUDE.md
 **/AGENTS.md
 
+# Internal working notes. Review findings, remediation logs and one-off
+# planning documents. Useful locally, not part of the project.
+docs/audit/
+docs/BLOCKERS.md
+docs/COMMIT_PLAN.md
+
+# Voice reference sample.
+# A biometric sample of a real, identifiable person does not belong in a
+# repository that may become public. Keep it locally, upload it to Kaggle as a
+# private dataset for the GPU TTS server, and document its provenance.
+# See docs/POSTURE.md and docs/VOICE_SETUP.md.
+backend/data/*.wav
+
 # Data (too large for git, download via scripts)
 data/raw/
 data/cleaned/
@@ -27,6 +40,9 @@ __pycache__/
 *.pyd
 .env
 .env.*
+# ...but the template MUST ship, otherwise nobody can configure the project.
+# The broad .env.* rule above was silently excluding it.
+!.env.example
 venv/
 .venv/
 
