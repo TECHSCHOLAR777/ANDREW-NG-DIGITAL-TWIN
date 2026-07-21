@@ -19,7 +19,7 @@
 -- Parameters:
 --   p_query_embedding  : pre-computed vector from text-embedding-004
 --   p_query_text       : raw query string for FTS
---   p_tenant_id        : tenant scope
+--   p_tenant_id        : optional corpus owner tenant. NULL = shared/global corpus.
 --   p_top_k            : number of results to return
 --   p_rrf_k            : RRF constant (default 60, standard)
 --   p_vector_weight    : weight for vector path (0-1)
@@ -63,7 +63,7 @@ vector_results AS (
             ORDER BY embedding <=> p_query_embedding    -- nearest first
         )                                               AS vec_rank
     FROM  knowledge_chunks
-    WHERE tenant_id = p_tenant_id
+    WHERE (p_tenant_id IS NULL OR tenant_id = p_tenant_id)
       AND embedding IS NOT NULL
       AND (p_source_types IS NULL OR source_type = ANY(p_source_types))
     ORDER BY embedding <=> p_query_embedding
@@ -72,17 +72,10 @@ vector_results AS (
 
 -- ── PATH 2: Full-Text Search (PostgreSQL native BM25-like) ───
 fts_query AS (
-    -- Convert raw text to a tsquery with phrase-then-fallback strategy:
-    -- 1. Try exact phrase query (highest precision)
-    -- 2. Fall back to OR of individual terms (higher recall)
+    -- Convert raw text to a safe tsquery. plainto_tsquery tolerates punctuation
+    -- and empty/special input better than hand-built to_tsquery strings.
     SELECT
-        COALESCE(
-            to_tsquery('english', replace(
-                trim(regexp_replace(regexp_replace(p_query_text, '[^a-zA-Z0-9 ]', ' ', 'g'), ' {2,}', ' ', 'g')),
-                ' ', ' & '
-            )),
-            plainto_tsquery('english', p_query_text)
-        ) AS tsq
+        plainto_tsquery('english', p_query_text) AS tsq
 ),
 
 fts_results AS (
@@ -93,7 +86,7 @@ fts_results AS (
             ORDER BY ts_rank_cd(kc.fts_document, fq.tsq, 32) DESC
         )                                               AS fts_rank
     FROM  knowledge_chunks kc, fts_query fq
-    WHERE kc.tenant_id = p_tenant_id
+    WHERE (p_tenant_id IS NULL OR kc.tenant_id = p_tenant_id)
       AND kc.fts_document @@ fq.tsq
       AND (p_source_types IS NULL OR kc.source_type = ANY(p_source_types))
     ORDER BY ts_score DESC
@@ -139,7 +132,7 @@ FROM
     rrf_fusion rf
     JOIN knowledge_chunks kc
         ON kc.id = rf.chunk_id
-        AND kc.tenant_id = p_tenant_id
+        AND (p_tenant_id IS NULL OR kc.tenant_id = p_tenant_id)
 ORDER BY
     final_score DESC
 LIMIT p_top_k;

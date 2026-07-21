@@ -7,9 +7,20 @@
 
 -- ── Unique constraint for (S, P, O) upsert ──────────────────
 -- Required by the TripletExtractor's ON CONFLICT DO UPDATE clause.
-ALTER TABLE relation_edges
-ADD CONSTRAINT IF NOT EXISTS uq_relation_edges_spo
-UNIQUE (tenant_id, subject_id, predicate, object_id);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'uq_relation_edges_spo'
+          AND conrelid = 'relation_edges'::regclass
+    ) THEN
+        ALTER TABLE relation_edges
+        ADD CONSTRAINT uq_relation_edges_spo
+        UNIQUE (tenant_id, subject_id, predicate, object_id);
+    END IF;
+END
+$$;
 
 -- ── BRIN index for time-range scans ─────────────────────────
 -- Very low write overhead; useful for "graph as of date X" queries.
