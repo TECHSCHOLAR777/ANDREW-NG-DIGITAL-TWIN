@@ -52,17 +52,43 @@ When you interact with the digital twin:
 │   └── tsconfig.json
 ├── scripts/
 │   ├── ingest_supabase.py       # Seeds the Supabase database with grounded materials and local embeddings
-│   ├── app.py                   # Legacy Streamlit interface
 │   ├── clean_text.py            # Text corpus normalizer
 │   ├── collect_*.py             # Raw data scrapers (blog posts, PDFs, transcripts, etc.)
 │   ├── generate_conversations.py# Context generator script
-│   ├── persona_engine.py        # System prompt playground
-│   └── query_rag.py             # CLI playground for hybrid search testing
+│   ├── chunking.py              # Structure-aware chunking (headings, overlap)
+│   ├── build_curriculum.py      # Offline prerequisite DAG extraction
+│   ├── migrate.py               # Applies migrations in order, records them
+│   └── eval/                    # Retrieval, persona and memory evaluation
+├── legacy/                      # Superseded version one, kept for reference
 ├── run_chatterbox_server.py     # Local TTS clone server runner
 ├── architecture.md              # Deep dive system design details
 ├── requirements.txt             # Python dependencies
 └── Dockerfile                   # Deployment container
 ```
+
+---
+
+## Setup status
+
+Run this first. It checks every layer and names exactly what is missing:
+
+```bash
+python scripts/smoke_test.py
+```
+
+**No local GPU?** The cloned voice runs on a free Kaggle T4 via
+[notebooks/kaggle_tts_server.ipynb](notebooks/kaggle_tts_server.ipynb). Without
+it, voice falls back to browser speech synthesis automatically.
+
+**Guides**
+
+| Guide | Covers |
+|---|---|
+| [docs/NEON_SETUP.md](docs/NEON_SETUP.md) | Database setup and full deployment |
+| [docs/VOICE_SETUP.md](docs/VOICE_SETUP.md) | Cloned voice on a Kaggle GPU, and voice mode |
+| [scripts/eval/README.md](scripts/eval/README.md) | Retrieval, persona and memory evaluation |
+| [docs/PRIVACY.md](docs/PRIVACY.md) | What is stored and where it goes |
+| [docs/POSTURE.md](docs/POSTURE.md) | Affiliation, corpus rights, voice cloning policy |
 
 ---
 
@@ -73,11 +99,34 @@ Create a `.env` file in the root directory:
 ```env
 DATABASE_URL=postgresql+asyncpg://postgres:your_supabase_password@db.your_supabase_project.supabase.co:5432/postgres
 GEMINI_API_KEY=your_gemini_api_key_here
+CORPUS_TENANT_ID=optional_uuid_that_owns_the_shared_andrew_corpus
+MAX_TTS_CHARS=1200
+CORS_ALLOW_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 ENVIRONMENT=development
+
+# Text-to-speech service (defaults to the local Chatterbox server)
+CHATTERBOX_URL=http://127.0.0.1:5002/v1/audio/speech
+
+# Retrieval tuning (all optional, shown with their defaults)
+EMBED_MODEL=all-mpnet-base-v2
+EMBED_WORKERS=2
+RETRIEVAL_NEIGHBOR_WINDOW=1      # chunks pulled either side of each hit
+RETRIEVAL_RRF_K=60
+RETRIEVAL_VECTOR_WEIGHT=0.65
+RETRIEVAL_FTS_WEIGHT=0.35
+RETRIEVAL_MIN_COSINE=0.35        # below this the answer is flagged ungrounded
+ENABLE_QUERY_REWRITE=true        # rewrite follow-ups into standalone questions
+MAX_CACHE_MANAGERS=128           # bound on cached per-key prompt managers
 ```
+
+> [!WARNING]
+> `ENVIRONMENT=production` enforces true BYOK: the server-side `GEMINI_API_KEY`
+> fallback is disabled and every request must carry the user's own key. Leaving
+> this at `development` on a public deployment means anonymous visitors bill your key.
 
 > [!NOTE]
 > The backend accepts client-provided keys sent via the `X-Gemini-Api-Key` header. If missing, it falls back to the backend's `.env` key.
+> `CORPUS_TENANT_ID` is optional. If omitted, retrieval treats `knowledge_chunks` as a shared corpus and searches all ingested chunks while keeping user memory tenant-scoped.
 
 ### Database Migrations
 Run these scripts sequentially in your Supabase SQL editor or direct database interface:
@@ -86,6 +135,87 @@ Run these scripts sequentially in your Supabase SQL editor or direct database in
 3. `backend/migrations/003_hybrid_retrieval_rrf.sql`
 4. `backend/migrations/004_production_hardening.sql`
 5. `backend/migrations/005_session_scoped_relations.sql`
+6. `backend/migrations/006_shared_corpus_retrieval.sql`
+7. `backend/migrations/007_bidirectional_traversal.sql`
+8. `backend/migrations/008_retrieval_quality.sql`
+9. `backend/migrations/009_temporal_graph.sql`
+10. `backend/migrations/010_session_persistence.sql`
+11. `backend/migrations/011_tenant_isolation.sql`
+12. `backend/migrations/012_curriculum_graph.sql`
+
+> [!TIP]
+> Rather than pasting these by hand, run `python scripts/migrate.py`. It applies
+> anything outstanding in order, records what ran in a `schema_migrations` table,
+> and supports `--status` and `--dry-run`.
+
+> [!IMPORTANT]
+> Migration 008 replaces the IVFFlat vector indexes with HNSW. The originals were
+> created before any data was ingested, so their centroids were trained on an empty
+> table and recall was silently degraded. Run it after your corpus is ingested.
+
+---
+
+## Curriculum graph
+
+Every concept in the memory graph comes from conversation, which means it only
+ever knows things a student has already mentioned. The curriculum layer adds
+the other half: a prerequisite DAG over machine learning concepts, extracted
+once from the corpus rather than from any user.
+
+The student graph then becomes an overlay on it. The curriculum says what
+depends on what; the student layer says where this person is. Three things
+become computable that a prompt cannot do:
+
+- **Learning paths.** Given a target concept, a topological sort over the
+  prerequisites the student has not yet mastered. The same target yields a
+  short path for an advanced learner and a long one for a beginner.
+- **Root cause diagnosis.** When several separate confusions share one upstream
+  prerequisite, that prerequisite is the real problem. A student stuck on
+  backpropagation, gradient descent and Adam does not have three problems.
+- **Pedagogical retrieval.** If the question depends on a concept the student
+  is shaky on, material for that concept is retrieved too, even though the
+  question never mentioned it.
+
+```bash
+# One-time build. A few hundred model calls over the structured documents.
+python scripts/build_curriculum.py --out data/baselines/curriculum.json
+
+# Review the JSON, correct anything wrong, then load it.
+python scripts/build_curriculum.py --load data/baselines/curriculum.json
+```
+
+The output is a reviewable, versioned artifact rather than an opaque table, so
+a bad extraction is a diff. Everything degrades gracefully when no curriculum
+is loaded: the product behaves exactly as it did before, without prerequisite
+reasoning.
+
+---
+
+## Evaluation
+
+The project measures itself in three layers. Details in
+[`scripts/eval/README.md`](scripts/eval/README.md).
+
+```bash
+# Unit tests: chunking, sanitisation, routing, persona validators. No API key.
+for f in backend/tests/test_*.py; do python "$f"; done
+
+# Style baseline measured from the real corpus. Offline, about a minute.
+python scripts/eval/corpus_style.py --save data/baselines/corpus_style.json
+
+# Persona: rule violations plus distance from that measured style.
+python scripts/eval/persona_eval.py
+
+# Retrieval: recall@k, MRR, abstention calibration, feature ablations.
+python scripts/eval/golden_set.py --n 100 --negatives 20
+python scripts/eval/retrieval_eval.py --ablate
+
+# Memory: scripted multi-session scenarios asserting what the graph believes.
+python scripts/eval/memory_eval.py
+```
+
+CI runs the offline subset plus a job that applies every migration in order
+against pgvector, so ordering and syntax errors are caught before Supabase.
 
 ---
 
@@ -127,6 +257,8 @@ To enable high-fidelity voice cloning rather than generic browser TTS:
    ```
 2. Install packages and start the Next.js server:
    ```bash
+   # Optional: point the UI at a non-local backend
+   # NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
    npm install
    npm run dev
    ```
