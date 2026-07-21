@@ -72,19 +72,42 @@ def parse_metadata_headers(content: str) -> tuple[dict, str]:
 from chunking import chunk_document  # noqa: E402
 
 
-_local_model = None
+# ── Embeddings ────────────────────────────────────────────────────────────────
+# Provider is chosen by EMBED_PROVIDER (gemini by default, local optional).
+# Whatever is used here MUST match what the backend uses at query time: vectors
+# from different models are not comparable, and mixing them silently destroys
+# retrieval rather than failing loudly.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
+from app.services import embeddings  # noqa: E402
+from app.services.embeddings import DailyQuotaExceeded  # noqa: E402
 
-# ── Fetch Embeddings locally using sentence-transformers ──────────────────────
-def get_embeddings_local(texts: list[str]) -> list[list[float]]:
-    if not texts:
-        return []
-    from sentence_transformers import SentenceTransformer
-    global _local_model
-    if _local_model is None:
-        logger.info("Loading local SentenceTransformer model '%s'...", EMBEDDING_MODEL)
-        _local_model = SentenceTransformer(EMBEDDING_MODEL)
-    
-    return _local_model.encode(texts, show_progress_bar=True, batch_size=128).tolist()
+
+class IngestFailed(RuntimeError):
+    """
+    Ingestion stopped before the corpus was complete.
+
+    Exists so the entrypoint can set a non-zero exit code. Without it a failed
+    run exited 0 and printed "Ingestion complete", which made a corpus that was
+    half built look finished.
+    """
+
+
+def get_embeddings(texts: list[str], api_key: str) -> list[list[float]]:
+    """
+    Embed a batch, with rate-limit backoff.
+
+    The free API tier allows roughly 96 chunks before a 429, so a naive loop
+    over ten thousand chunks fails partway through. embed_documents backs off
+    and retries rather than leaving a half-ingested corpus.
+    """
+    done = {"n": 0}
+
+    def progress(current, total):
+        if current // 200 > done["n"] // 200:
+            logger.info("  embedded %d/%d", current, total)
+        done["n"] = current
+
+    return embeddings.embed_documents(texts, api_key=api_key, on_progress=progress)
 
 
 async def ensure_corpus_tenant(conn: asyncpg.Connection) -> uuid.UUID:
@@ -130,6 +153,15 @@ async def main():
         logger.error("DATABASE_URL env var is missing.")
         return
 
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if embeddings.EMBED_PROVIDER == "gemini" and not api_key:
+        logger.error(
+            "EMBED_PROVIDER=gemini needs GEMINI_API_KEY for ingestion. "
+            "Set it, or use EMBED_PROVIDER=local."
+        )
+        return
+    logger.info("Embedding provider: %s", embeddings.describe())
+
     # Normalize DB URL for asyncpg
     db_url = db_url.replace("postgresql+asyncpg://", "postgresql://")
 
@@ -141,6 +173,28 @@ async def main():
     tenant_id = await ensure_corpus_tenant(conn)
 
     logger.info("Using Tenant ID: %s", tenant_id)
+
+    # Refuse to mix embedding models.
+    #
+    # mpnet and gemini-embedding-001 both emit 768 dimensions, so mixing them
+    # satisfies the schema, raises nothing, and logs nothing. Retrieval just
+    # returns irrelevant passages and the tutor answers fluently from them.
+    # Better to stop here than to produce a corpus that is quietly broken.
+    current_model = embeddings.describe().split(" ")[0]
+    existing = await conn.fetch("SELECT * FROM corpus_embedding_models()")
+    other = [r for r in existing if r["embedding_model"] != current_model]
+    if other:
+        logger.error("Corpus was embedded with a different model:")
+        for r in existing:
+            logger.error("    %-42s %d chunks", r["embedding_model"], r["chunks"])
+        logger.error("Now configured for: %s", current_model)
+        logger.error(
+            "Vectors from different models are not comparable. Either set "
+            "EMBED_PROVIDER back, or clear the corpus and re-ingest:"
+        )
+        logger.error("    DELETE FROM knowledge_chunks;")
+        await conn.close()
+        return
 
     # Pre-fetch all ingested files and counts in a single query
     rows = await conn.fetch(
@@ -162,6 +216,9 @@ async def main():
 
     # 2. Scan and identify pending chunks to embed locally
     pending_chunks = []
+    # Files whose existing rows must be dropped before the replacements land.
+    # Applied at insert time, inside the insert's transaction, never earlier.
+    files_to_reset: set[str] = set()
     pbar = tqdm(all_files, desc="Scanning local files against database")
     
     for file_path in pbar:
@@ -191,15 +248,21 @@ async def main():
             # Fully ingested, skip
             continue
         elif db_chunk_count > 0:
-            # Partially ingested, delete so we can clean-ingest it
-            logger.info("Partial upload detected for %s (%d/%d chunks). Resetting...", source_file, db_chunk_count, len(chunks))
-            conn = await asyncpg.connect(dsn=db_url)
-            await conn.execute(
-                "DELETE FROM knowledge_chunks WHERE tenant_id = $1 AND source_file = $2",
-                tenant_id,
-                source_file
+            # Partially ingested, so its rows must be replaced.
+            #
+            # The delete is NOT done here. This is the scan phase; embedding and
+            # insertion happen later. Deleting now commits immediately, and if
+            # embedding then fails (a spent daily quota is enough), the old rows
+            # are gone and the new ones were never written. That is how a run
+            # that ingested nothing still managed to shrink the corpus.
+            #
+            # Instead the file is marked, and the delete happens in the same
+            # transaction as the insert that replaces it.
+            logger.info(
+                "Partial upload detected for %s (%d/%d chunks). Will replace.",
+                source_file, db_chunk_count, len(chunks),
             )
-            await conn.close()
+            files_to_reset.add(source_file)
             db_files[source_file] = 0
 
         for idx, chunk in enumerate(chunks):
@@ -235,11 +298,26 @@ async def main():
         
         # 3a. Compute embeddings locally (no DB connection active)
         texts_to_embed = [c["embed_text"] for c in batch]
+        # A failure here must not look like success. The earlier version logged
+        # and returned, so the process exited 0 and printed the completion
+        # message, which is how a run that embedded nothing at all was mistaken
+        # for a finished corpus. Raise, and let the entrypoint set the exit code.
         try:
-            vectors = get_embeddings_local(texts_to_embed)
+            vectors = get_embeddings(texts_to_embed, api_key)
+        except DailyQuotaExceeded:
+            # Deliberately not wrapped. This is "come back after the reset",
+            # not a fault, and the entrypoint reports it as exit 75. Wrapping
+            # it in IngestFailed collapsed that back to a generic exit 1.
+            logger.info(
+                "Stopped at %d of %d chunks. Re-run after the quota resets; "
+                "completed files are skipped.", i, total_chunks,
+            )
+            raise
         except Exception as e:
-            logger.error("Failed to fetch local embeddings for batch %d: %s", batch_num, e)
-            return
+            raise IngestFailed(
+                f"Embedding failed on batch {batch_num}/{total_batches} "
+                f"({i} of {total_chunks} chunks done): {e}"
+            ) from e
 
         # 3b. Open DB connection briefly for bulk insert
         logger.info("Connecting to Supabase to insert batch %d/%d...", batch_num, total_batches)
@@ -254,28 +332,54 @@ async def main():
                 c["chunk_text"],
                 str(vector),
                 True,   # is_shared: this is the public Andrew corpus
+                current_model,
             )
             for c, vector in zip(batch, vectors)
         ]
 
+        # Files in this batch whose stale rows still need clearing. Doing it
+        # inside the transaction below means a failure rolls the delete back
+        # with the insert, so the old rows survive until replacements exist.
+        resetting = sorted({c["source_file"] for c in batch} & files_to_reset)
+
         try:
-            await conn.executemany(
-                """
-                INSERT INTO knowledge_chunks
-                    (tenant_id, source_file, source_type, chunk_index, chunk_text,
-                     embedding, is_shared)
-                VALUES ($1, $2, $3, $4, $5, $6::vector, $7)
-                """,
-                insert_data
-            )
+            async with conn.transaction():
+                for source_file in resetting:
+                    await conn.execute(
+                        "DELETE FROM knowledge_chunks "
+                        "WHERE tenant_id = $1 AND source_file = $2",
+                        tenant_id,
+                        source_file,
+                    )
+                await conn.executemany(
+                    """
+                    INSERT INTO knowledge_chunks
+                        (tenant_id, source_file, source_type, chunk_index, chunk_text,
+                         embedding, is_shared, embedding_model)
+                    VALUES ($1, $2, $3, $4, $5, $6::vector, $7, $8)
+                    """,
+                    insert_data
+                )
+            files_to_reset -= set(resetting)
         except Exception as e:
-            logger.error("Database insertion failed for batch %d: %s", batch_num, e)
             await conn.close()
-            return
+            raise IngestFailed(
+                f"Insert failed on batch {batch_num}/{total_batches} "
+                f"({i} of {total_chunks} chunks done): {e}"
+            ) from e
 
         # 3c. Close DB connection immediately after the batch is uploaded
         await conn.close()
     logger.info("Ingestion complete! Database is loaded and ready.")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except DailyQuotaExceeded as exc:
+        # Expected and recoverable, just not today. Exit 75 (EX_TEMPFAIL) so a
+        # wrapper can tell "come back tomorrow" apart from a real breakage.
+        logger.error("%s", exc)
+        sys.exit(75)
+    except IngestFailed as exc:
+        logger.error("%s", exc)
+        sys.exit(1)
