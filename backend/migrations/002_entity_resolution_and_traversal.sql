@@ -143,7 +143,11 @@ traversal(
     SELECT
         unnest(p_anchor_ids)    AS node_id,
         0                       AS hop_distance,
-        1.0                     AS path_weight,
+        -- Must be double precision, not the numeric that a bare 1.0 literal
+        -- produces. The recursive term multiplies by relation_edges.weight,
+        -- which is FLOAT, and Postgres requires both terms of a recursive CTE
+        -- to agree on column types.
+        1.0::double precision   AS path_weight,
         ARRAY[]::TEXT[]         AS predicates_path,
         p_anchor_ids            AS visited
 
