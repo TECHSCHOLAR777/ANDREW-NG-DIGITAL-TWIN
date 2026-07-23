@@ -229,6 +229,26 @@ def _get_corpus_tenant_id() -> str | None:
     return raw
 
 
+async def _fetch_account_context(conn: asyncpg.Connection, tenant_id: str) -> str | None:
+    """
+    The optional note a signed-in user left at signup ("what should the twin
+    remember about you?"), injected into the persona profile.
+
+    app_users is owned by the Next.js auth layer (migration 016). This tolerates
+    the table being absent so the backend still runs against a database that has
+    not applied it, such as an older setup or a stripped test schema.
+    """
+    try:
+        return await conn.fetchval(
+            "SELECT context FROM app_users "
+            "WHERE tenant_id = $1::uuid AND context IS NOT NULL AND context <> '' "
+            "LIMIT 1",
+            uuid.UUID(tenant_id),
+        )
+    except asyncpg.UndefinedTableError:
+        return None
+
+
 async def _sweep_unprocessed_turns(
     db: asyncpg.Pool,
     tenant_id: str,
@@ -390,7 +410,15 @@ async def _prepare_turn(
     # model to infer their level from the current message alone.
     async with db.acquire() as conn:
         student_name = await gmem.resolve_student_name(conn, uuid.UUID(tenant_id))
+        account_context = await _fetch_account_context(conn, tenant_id)
     learner_profile = persona_mod.build_learner_profile(live_edges, student_name)
+
+    if account_context:
+        # What the person volunteered about themselves when they signed up.
+        # Stated as context, not an instruction, and length-capped.
+        learner_profile += (
+            f" When they signed up they said: {account_context[:400]}."
+        )
 
     if gap_diagnosis:
         # Stated as an observation rather than an instruction, so the tutor
