@@ -22,11 +22,13 @@ import {
   Moon,
   ChevronDown,
   Sparkles,
+  User,
 } from "lucide-react";
-import { KnowledgeGraphView } from "../components/KnowledgeGraphView";
-import { MessageContent } from "../components/MessageContent";
-import { ErrorNotice, classifyError, type ChatError } from "../components/ErrorNotice";
-import type { TripletRow, EdgeRow } from "../types/graph";
+import { SlidingTabs } from "@/components/ui/sliding-tabs";
+import { KnowledgeGraphView } from "@/components/KnowledgeGraphView";
+import { MessageContent } from "@/components/MessageContent";
+import { ErrorNotice, classifyError, type ChatError } from "@/components/ErrorNotice";
+import type { TripletRow, EdgeRow } from "@/types/graph";
 
 // Browser storage keys
 const KEY_LOCAL_STORAGE_GEMINI = "andrew_ng_byok_key";
@@ -1112,7 +1114,7 @@ export default function ChatPage() {
         
         {/* Header / Logo */}
         <div className="p-5 border-b border-[var(--border)] flex items-center gap-3">
-          <BookOpen className="text-[var(--accent)] w-5 h-5 flex-shrink-0" />
+          <BookOpen className="text-[var(--brand)] w-5 h-5 flex-shrink-0" />
           <div className="min-w-0 flex-1">
             <h1 className="font-semibold text-[14px] text-[var(--text)]">Andrew Ng</h1>
             <p className="text-[11px] text-[var(--text-muted)] font-normal tracking-[0.07em]">
@@ -1135,7 +1137,7 @@ export default function ChatPage() {
         <div className="p-4">
           <button
             onClick={handleNewChat}
-            className="w-full bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-text)] font-medium text-[13px] py-2.5 rounded-lg flex items-center justify-center gap-2 transition shadow-sm"
+            className="w-full bg-[var(--brand)] hover:bg-[var(--brand-hover)] text-[var(--brand-text)] font-medium text-[13px] py-2.5 rounded-lg flex items-center justify-center gap-2 transition shadow-sm"
           >
             <Plus className="w-4 h-4" />
             New conversation
@@ -1171,7 +1173,7 @@ export default function ChatPage() {
           <div id="settings-panel" className="px-4 pb-4 flex flex-col gap-4 border-b border-[var(--border)]">
             <div className="flex flex-col gap-2">
               <label htmlFor="gemini-key" className="text-[11px] font-medium text-[var(--text-muted)] flex items-center gap-1.5">
-                <Key className="w-3.5 h-3.5 text-[var(--accent)]" />
+                <Key className="w-3.5 h-3.5 text-[var(--brand)]" />
                 Your Gemini API key
               </label>
               <input
@@ -1181,7 +1183,7 @@ export default function ChatPage() {
                 value={geminiKey}
                 onChange={(e) => handleSaveKey(e.target.value)}
                 aria-describedby="gemini-key-help"
-                className="w-full bg-[var(--surface)] border text-[13px] px-3 py-2 rounded-lg text-[var(--text)] placeholder-[var(--text-subtle)] focus:outline-none focus:border-[var(--accent)] transition"
+                className="w-full bg-[var(--surface)] border text-[13px] px-3 py-2 rounded-lg text-[var(--text)] placeholder-[var(--text-subtle)] focus:outline-none focus:border-[var(--brand)] transition"
                 style={{ borderColor: geminiKey.trim() ? "var(--ok)" : "var(--border)" }}
               />
               {/* The field previously gave no feedback at all: nothing told the
@@ -1197,7 +1199,7 @@ export default function ChatPage() {
             <div className="flex flex-col gap-2">
               <label htmlFor="speech-rate" className="text-[11px] text-[var(--text-muted)] font-medium flex justify-between">
                 <span>Speaking speed</span>
-                <span className="text-[var(--accent)]">{ttsSpeed.toFixed(2)}x</span>
+                <span className="text-[var(--brand)]">{ttsSpeed.toFixed(2)}x</span>
               </label>
               <input
                 id="speech-rate"
@@ -1207,7 +1209,7 @@ export default function ChatPage() {
                 step="0.05"
                 value={ttsSpeed}
                 onChange={(e) => setTtsSpeed(parseFloat(e.target.value))}
-                className="w-full h-1 bg-[var(--border)] rounded-lg appearance-none cursor-pointer accent-[var(--accent)]"
+                className="w-full h-1 bg-[var(--border)] rounded-lg appearance-none cursor-pointer accent-[var(--brand)]"
               />
             </div>
 
@@ -1240,7 +1242,7 @@ export default function ChatPage() {
                   }
                 }}
                 className={`group px-3 py-2.5 rounded-lg cursor-pointer flex items-center justify-between transition ${
-                  isActive ? "bg-[var(--accent-soft)] border border-[var(--border)] text-[var(--accent)]" : "hover:bg-[var(--bg)] text-[var(--text-muted)] hover:text-[var(--text)]"
+                  isActive ? "bg-[var(--brand-soft)] border border-[var(--border)] text-[var(--brand)]" : "hover:bg-[var(--bg)] text-[var(--text-muted)] hover:text-[var(--text)]"
                 }`}
               >
                 <span className="text-[13px] font-normal truncate max-w-[160px]">{session.title}</span>
@@ -1273,7 +1275,7 @@ export default function ChatPage() {
             >
               <Menu className="w-4 h-4" />
             </button>
-            <div className="w-8 h-8 rounded-full bg-[var(--accent)] text-[var(--accent-text)] flex items-center justify-center font-semibold text-[14px] flex-shrink-0">AN</div>
+            <div className="w-8 h-8 rounded-full bg-[var(--brand)] text-[var(--brand-text)] flex items-center justify-center font-semibold text-[14px] flex-shrink-0">AN</div>
             <div className="min-w-0">
               <h2 className="text-[14px] font-medium text-[var(--text)] truncate">Andrew Ng</h2>
               <span className="text-[11px] text-green-600 font-normal flex items-center gap-1">
@@ -1310,7 +1312,7 @@ export default function ChatPage() {
               }}
               className={`p-2 rounded-lg border transition ${
                 readAloudEnabled
-                  ? "bg-[var(--accent-soft)] border-[var(--border-strong)] text-[var(--accent)]"
+                  ? "bg-[var(--brand-soft)] border-[var(--border-strong)] text-[var(--brand)]"
                   : "border-[var(--border)] text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--bg)]"
               }`}
               title="Toggle read aloud" aria-label="Toggle read aloud" aria-pressed={readAloudEnabled}
@@ -1332,10 +1334,10 @@ export default function ChatPage() {
                 {/* Avatar */}
                 <div
                   className={`w-8 h-8 rounded-full flex items-center justify-center font-medium text-[13px] flex-shrink-0 ${
-                    isUser ? "bg-[var(--text-muted)] text-[var(--accent-text)]" : "bg-[var(--accent)] text-[var(--accent-text)]"
+                    isUser ? "bg-[var(--text-muted)] text-[var(--brand-text)]" : "bg-[var(--brand)] text-[var(--brand-text)]"
                   }`}
                 >
-                  {isUser ? "S" : "AN"}
+                  {isUser ? <User className="w-4 h-4" /> : "AN"}
                 </div>
                 
                 {/* Message Box */}
@@ -1348,7 +1350,7 @@ export default function ChatPage() {
                       context for what follows, not a footnote about it. */}
                   {!isUser && msg.recalled && msg.recalled.length > 0 && (
                     <div className="flex items-start gap-1.5 text-[12px] text-[var(--text-muted)] -mt-1">
-                      <Sparkles className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-[var(--accent)]" />
+                      <Sparkles className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-[var(--brand)]" />
                       <span>
                         Building on what we covered before: {msg.recalled.join(", ")}
                       </span>
@@ -1359,7 +1361,7 @@ export default function ChatPage() {
                       cover the question, so the answer is general expertise
                       rather than something Andrew wrote about. */}
                   {!isUser && msg.isGrounded === false && (
-                    <div className="flex items-start gap-1.5 text-[11px] text-amber-800 bg-amber-50 border border-amber-200 px-2.5 py-1.5 rounded-lg mt-1">
+                    <div className="flex items-start gap-1.5 text-[11px] px-2.5 py-1.5 rounded-lg mt-1 border" style={{ color: "var(--warn)", background: "var(--warn-soft)", borderColor: "var(--warn-border)" }}>
                       <span>
                         Outside Andrew&apos;s written material. This answer is his general
                         perspective rather than a grounded citation.
@@ -1377,9 +1379,9 @@ export default function ChatPage() {
                         <span
                           key={cIdx}
                           title={chunk.chunk_text ? `${chunk.chunk_text.slice(0, 300)}…` : `Score: ${chunk.final_score.toFixed(4)}`}
-                          className="text-[11px] text-[var(--accent)] hover:text-[var(--accent)]/80 bg-[var(--accent-soft)] px-2 py-1 rounded-lg border border-[var(--border)] max-w-[180px] truncate cursor-help flex items-center gap-1"
+                          className="text-[11px] text-[var(--brand)] hover:text-[var(--brand)]/80 bg-[var(--brand-soft)] px-2 py-1 rounded-lg border border-[var(--border)] max-w-[180px] truncate cursor-help flex items-center gap-1"
                         >
-                          <BookOpen className="w-3 h-3 text-[var(--accent)] flex-shrink-0" />
+                          <BookOpen className="w-3 h-3 text-[var(--brand)] flex-shrink-0" />
                           {chunk.source_file.replace(/_/g, " ").replace(".txt", "")}
                         </span>
                       ))}
@@ -1390,8 +1392,8 @@ export default function ChatPage() {
                       usage metadata, not an inference from object age. */}
                   {!isUser && (msg.cachedTokenCount ?? 0) > 0 && (
                     <div className="flex items-center gap-1.5 text-[11px] font-normal mt-1">
-                      <span className="flex items-center gap-0.5 text-cyan-800 bg-cyan-50 px-2 py-0.5 rounded-full border border-cyan-200">
-                        <Zap className="w-3 h-3 fill-cyan-700 text-cyan-700" />
+                      <span className="flex items-center gap-0.5 px-2 py-0.5 rounded-full border" style={{ color: "var(--ok)", background: "var(--ok-soft)", borderColor: "var(--border)" }}>
+                        <Zap className="w-3 h-3" style={{ fill: "var(--ok)", color: "var(--ok)" }} />
                         {msg.cachedTokenCount?.toLocaleString()} tokens served from cache
                       </span>
                     </div>
@@ -1405,7 +1407,7 @@ export default function ChatPage() {
               a static "Thinking..." for a 5 to 20 second wait read as a hang. */}
           {isLoading && !hasStreamingText && (
             <div className="flex gap-2 sm:gap-4 max-w-3xl">
-              <div className="w-8 h-8 rounded-full bg-[var(--accent)] text-[var(--accent-text)] flex items-center justify-center font-medium text-[13px] flex-shrink-0">
+              <div className="w-8 h-8 rounded-full bg-[var(--brand)] text-[var(--brand-text)] flex items-center justify-center font-medium text-[13px] flex-shrink-0">
                 AN
               </div>
               <div className="px-4 py-3 rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-sm flex items-center gap-1.5">
@@ -1440,7 +1442,7 @@ export default function ChatPage() {
                   <button
                     key={q}
                     onClick={() => void submitDialogueMessage(q)}
-                    className="text-left text-[13px] px-3 py-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] transition"
+                    className="text-left text-[13px] px-3 py-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:border-[var(--brand)] hover:bg-[var(--brand-soft)] transition"
                   >
                     {q}
                   </button>
@@ -1475,14 +1477,14 @@ export default function ChatPage() {
                 onChange={(e) => setUserInput(e.target.value)}
                 placeholder={isRecording ? "Listening..." : "Ask Andrew a question about ML models..."}
                 disabled={isLoading}
-                className="w-full bg-[var(--surface)] border border-[var(--border)] text-[13px] px-4 py-3.5 pr-20 rounded-xl focus:outline-none focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)] text-[var(--text)] placeholder-[var(--text-subtle)] transition"
+                className="w-full bg-[var(--surface)] border border-[var(--border)] text-[13px] px-4 py-3.5 pr-20 rounded-xl focus:outline-none focus:border-[var(--brand)] focus:ring-1 focus:ring-[var(--brand)] text-[var(--text)] placeholder-[var(--text-subtle)] transition"
               />
               <button
                 type="button"
                 onClick={() => {
                   setVoiceState("listening");
                 }}
-                className="absolute right-10 top-3.5 text-[var(--text-muted)] hover:text-[var(--accent)] transition"
+                className="absolute right-10 top-3.5 text-[var(--text-muted)] hover:text-[var(--brand)] transition"
                 title="Start voice dialogue mode" aria-label="Start hands-free voice conversation"
               >
                 <Headphones className="w-4 h-4" />
@@ -1492,7 +1494,7 @@ export default function ChatPage() {
                 onClick={handleToggleRecording}
                 disabled={isLoading}
                 className={`absolute right-3 top-3.5 transition ${
-                  isRecording ? "text-red-500 hover:text-red-700" : "text-[var(--text-muted)] hover:text-[var(--accent)]"
+                  isRecording ? "text-red-500 hover:text-red-700" : "text-[var(--text-muted)] hover:text-[var(--brand)]"
                 }`}
                 title={isRecording ? "Stop recording" : "Record voice input"}
                 aria-label={isRecording ? "Stop recording" : "Record voice input"}
@@ -1506,7 +1508,7 @@ export default function ChatPage() {
               type="submit"
               disabled={isLoading}
               aria-label="Send message"
-              className="bg-[var(--accent)] hover:bg-[var(--accent)]/90 disabled:opacity-50 text-[var(--accent-text)] p-3.5 rounded-xl flex items-center justify-center transition shadow-sm"
+              className="bg-[var(--brand)] hover:bg-[var(--brand)]/90 disabled:opacity-50 text-[var(--brand-text)] p-3.5 rounded-xl flex items-center justify-center transition shadow-sm"
             >
               <Send className="w-4 h-4" />
             </button>
@@ -1535,35 +1537,23 @@ export default function ChatPage() {
             >
               <X className="w-4 h-4" />
             </button>
-            <Cpu className="text-[var(--accent)] w-4 h-4" />
+            <Cpu className="text-[var(--brand)] w-4 h-4" />
             <h2 className="text-[14px] font-medium text-[var(--text)]">What I know about you</h2>
           </div>
           
           {/* Segment control toggle & Sync button */}
           <div className="flex items-center gap-3">
-            <div className="flex bg-[var(--surface-alt)] p-0.5 rounded-lg border border-[var(--border)]">
-              <button
-                onClick={() => setGraphView("session")}
-                className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-all ${
-                  graphView === "session"
-                    ? "bg-[var(--surface)] text-[var(--text)] shadow-sm"
-                    : "text-[var(--text-muted)] hover:text-[var(--text)]"
-                }`}
-              >
-                Active Chat
-              </button>
-              <button
-                onClick={() => setGraphView("global")}
-                className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-all ${
-                  graphView === "global"
-                    ? "bg-[var(--surface)] text-[var(--text)] shadow-sm"
-                    : "text-[var(--text-muted)] hover:text-[var(--text)]"
-                }`}
-              >
-                Global Map
-              </button>
-            </div>
-            
+            <SlidingTabs
+              size="sm"
+              aria-label="Knowledge graph scope"
+              value={graphView}
+              onValueChange={setGraphView}
+              options={[
+                { value: "session", label: "Active Chat" },
+                { value: "global", label: "Global Map" },
+              ]}
+            />
+
             <button
               onClick={() => handleSyncGraph(graphView)}
               disabled={isSyncingGraph}
@@ -1639,7 +1629,7 @@ export default function ChatPage() {
                   setVoiceState("inactive");
                 }
               }}
-              className="px-6 py-2.5 bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-[var(--accent-text)] rounded-full text-[13px] font-medium mb-6 transition"
+              className="px-6 py-2.5 bg-[var(--brand)] hover:bg-[var(--brand)]/90 text-[var(--brand-text)] rounded-full text-[13px] font-medium mb-6 transition"
             >
               {voiceState === "listening" ? "Stop listening" : "Tap to interrupt"}
             </button>
@@ -1657,7 +1647,7 @@ export default function ChatPage() {
               >
                 -
               </button>
-              <span className="text-[12px] text-[var(--accent)] font-medium min-w-[32px] text-center">{ttsSpeed.toFixed(1)}x</span>
+              <span className="text-[12px] text-[var(--brand)] font-medium min-w-[32px] text-center">{ttsSpeed.toFixed(1)}x</span>
               <button
                 onClick={() => setTtsSpeed(prev => Math.min(1.5, prev + 0.1))}
                 className="text-xs text-[var(--text-muted)] hover:text-[var(--text)] px-1 font-bold cursor-pointer"

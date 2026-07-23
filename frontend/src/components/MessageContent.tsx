@@ -86,7 +86,7 @@ function MessageContentImpl({ content }: MessageContentProps) {
               href={href}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-[var(--accent)] underline underline-offset-2"
+              className="text-[var(--brand)] underline underline-offset-2"
             >
               {children}
             </a>

@@ -61,34 +61,52 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import time
 
 logger = logging.getLogger(__name__)
 
-# "gemini" keeps the API process small enough for a free tier.
-# "local" runs sentence-transformers in-process; no API key, no network.
-EMBED_PROVIDER = os.getenv("EMBED_PROVIDER", "gemini").lower()
+# Provider selection.
+#   "jina"   — Jina AI API. The default. 10M free tokens (no card), jina-embeddings-v3,
+#              1024-dim, asymmetric retrieval.query/retrieval.passage, 100 RPM /
+#              100K TPM on the free tier. No batch size limit.
+#   "voyage" — Voyage AI API. 200M free tokens but requires adding a payment
+#              method to unlock standard rate limits (3 RPM without card).
+#   "gemini" — Gemini embedding API. Free but ~1000 texts/day per-minute cap
+#              makes bulk ingest very slow.
+#   "local"  — sentence-transformers in-process; no key, no network, but puts
+#              torch back in the image. Development and tests only.
+EMBED_PROVIDER = os.getenv("EMBED_PROVIDER", "jina").lower()
 
+JINA_EMBED_MODEL = os.getenv("JINA_EMBED_MODEL", "jina-embeddings-v3")
+VOYAGE_EMBED_MODEL = os.getenv("VOYAGE_EMBED_MODEL", "voyage-4-lite")
 GEMINI_EMBED_MODEL = os.getenv("GEMINI_EMBED_MODEL", "models/gemini-embedding-001")
 LOCAL_EMBED_MODEL = os.getenv("EMBED_MODEL", "all-mpnet-base-v2")
 
-# The schema stores VECTOR(768). Changing this needs a migration and a full
-# re-ingest, so it is deliberately not a casual knob.
-EMBED_DIMS = int(os.getenv("EMBED_DIMS", "768"))
+# The schema stores VECTOR(<EMBED_DIMS>). Changing this needs a migration and a
+# full re-ingest, so it is deliberately not a casual knob. jina-embeddings-v3
+# and voyage-4-lite both emit 1024 by default.
+EMBED_DIMS = int(os.getenv("EMBED_DIMS", "1024"))
 
-# 100 is the API's maximum texts per embed request. Since the free tier is
-# capped on REQUESTS PER DAY, a smaller batch does not buy safety, it just
-# spends the day's quota faster. This was 16, which cost 6x the requests for
-# no benefit.
-EMBED_BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "100"))
+# Texts per request. Jina has no limit; Voyage allows 1000; Gemini caps at 100.
+# 500 is safe for all providers and keeps each request under Jina's 100K TPM
+# ceiling at ~200 tokens/text average.
+EMBED_BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "500"))
 
-# Small gap between batches. Not a quota control (the quota is daily and
-# nothing paced can help), just politeness so a burst of ~112 requests does not
-# arrive as fast as the network allows.
-EMBED_PACE_SECONDS = float(os.getenv("EMBED_PACE_SECONDS", "1.0"))
+# Seconds to wait between batches. Jina's 100K TPM means ~500 texts × 200 tokens
+# = 100K tokens per batch, so one batch per minute at most on the free tier.
+# A 62s pace keeps us safely under the window. Voyage and Gemini have their own
+# limits but this value is conservative enough for all.
+EMBED_PACE_SECONDS = float(os.getenv("EMBED_PACE_SECONDS", "62.0"))
 
 QUERY = "RETRIEVAL_QUERY"
 DOCUMENT = "RETRIEVAL_DOCUMENT"
+
+# Voyage names the same idea "query" / "document".
+_VOYAGE_INPUT_TYPE = {QUERY: "query", DOCUMENT: "document"}
+
+# Jina uses "retrieval.query" / "retrieval.passage".
+_JINA_TASK = {QUERY: "retrieval.query", DOCUMENT: "retrieval.passage"}
 
 
 class EmbeddingError(RuntimeError):
@@ -135,6 +153,123 @@ def _get_local_model():
 def _local_encode(texts: list[str]) -> list[list[float]]:
     model = _get_local_model()
     return [v.tolist() for v in model.encode(texts, show_progress_bar=False)]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# VOYAGE PROVIDER
+# ─────────────────────────────────────────────────────────────────────────────
+VOYAGE_URL = "https://api.voyageai.com/v1/embeddings"
+
+
+def _voyage_encode(texts: list[str], api_key: str, task_type: str) -> list[list[float]]:
+    """
+    Embed via the Voyage AI REST API.
+
+    Uses httpx (already a dependency) rather than the voyageai SDK, to avoid
+    adding a package for one endpoint. input_type carries the same asymmetry as
+    the Gemini path: a query and the document answering it are embedded with
+    different prompts, which Voyage handles server-side when input_type is set.
+    """
+    if not api_key:
+        raise EmbeddingError(
+            "EMBED_PROVIDER=voyage needs an API key. Ingestion uses "
+            "VOYAGE_API_KEY; queries use the caller's key."
+        )
+
+    import httpx
+
+    payload = {
+        "model": VOYAGE_EMBED_MODEL,
+        "input": texts,
+        "input_type": _VOYAGE_INPUT_TYPE.get(task_type, "document"),
+        "output_dimension": EMBED_DIMS,
+    }
+    try:
+        resp = httpx.post(
+            VOYAGE_URL,
+            headers={"Authorization": f"Bearer {api_key}"},
+            json=payload,
+            timeout=60.0,
+        )
+    except httpx.HTTPError as exc:
+        raise EmbeddingError(f"Voyage request failed: {exc}") from exc
+
+    if resp.status_code == 429:
+        retry_after = resp.headers.get("retry-after") or resp.headers.get("x-ratelimit-reset-requests", "")
+        hint = f" retryDelay: \"{retry_after}s\"" if retry_after else ""
+        raise EmbeddingError(f"429 Voyage rate limit:{hint} {resp.text[:200]}")
+    if resp.status_code >= 400:
+        raise EmbeddingError(
+            f"Voyage returned {resp.status_code}: {resp.text[:300]}"
+        )
+
+    data = resp.json().get("data", [])
+    # The API preserves input order, but sort on the returned index to be
+    # certain a batch is never silently misaligned with its texts.
+    data.sort(key=lambda d: d.get("index", 0))
+    vectors = [d["embedding"] for d in data]
+    if len(vectors) != len(texts):
+        raise EmbeddingError(
+            f"Voyage returned {len(vectors)} vectors for {len(texts)} texts"
+        )
+    return vectors
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JINA PROVIDER
+# ─────────────────────────────────────────────────────────────────────────────
+JINA_URL = "https://api.jina.ai/v1/embeddings"
+
+
+def _jina_encode(texts: list[str], api_key: str, task_type: str) -> list[list[float]]:
+    """
+    Embed via the Jina AI REST API (jina-embeddings-v3).
+
+    Free tier: 10M tokens, no card required. 100 RPM / 100K TPM.
+    No batch size limit. 1024-dim default, asymmetric retrieval.
+    """
+    if not api_key:
+        raise EmbeddingError(
+            "EMBED_PROVIDER=jina needs JINA_API_KEY. Get one free (no card) at jina.ai."
+        )
+
+    import httpx
+
+    payload = {
+        "model": JINA_EMBED_MODEL,
+        "input": texts,
+        "task": _JINA_TASK.get(task_type, "retrieval.passage"),
+        "dimensions": EMBED_DIMS,
+        "normalized": True,
+        "embedding_type": "float",
+    }
+    try:
+        resp = httpx.post(
+            JINA_URL,
+            headers={"Authorization": f"Bearer {api_key}"},
+            json=payload,
+            timeout=120.0,
+        )
+    except httpx.HTTPError as exc:
+        raise EmbeddingError(f"Jina request failed: {exc}") from exc
+
+    if resp.status_code == 429:
+        retry_after = resp.headers.get("retry-after", "")
+        hint = f" retryDelay: \"{retry_after}s\"" if retry_after else ""
+        raise EmbeddingError(f"429 Jina rate limit:{hint} {resp.text[:200]}")
+    if resp.status_code >= 400:
+        raise EmbeddingError(
+            f"Jina returned {resp.status_code}: {resp.text[:300]}"
+        )
+
+    data = resp.json().get("data", [])
+    data.sort(key=lambda d: d.get("index", 0))
+    vectors = [d["embedding"] for d in data]
+    if len(vectors) != len(texts):
+        raise EmbeddingError(
+            f"Jina returned {len(vectors)} vectors for {len(texts)} texts"
+        )
+    return vectors
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -211,19 +346,39 @@ def _is_rate_limit(exc: BaseException) -> bool:
 
 def _is_daily_quota(exc: BaseException) -> bool:
     """
-    Distinguish the daily cap from a transient burst limit.
+    Distinguish the daily cap from the per-minute one.
 
-    They arrive as the same 429, but only one of them is worth waiting for.
-    The daily one names itself in the violation:
+    The free tier enforces BOTH, and a 429 can be either:
 
-        quota_id: EmbedContentRequestsPerDayPerUserPerProjectPerModel-FreeTier
+        EmbedContentRequestsPerDayPerUserPerProjectPerModel-FreeTier     1000/day
+        EmbedContentRequestsPerMinutePerUserPerProjectPerModel-FreeTier   100/min
 
-    Retrying that burns eleven minutes to fail anyway, and worse, it buries the
-    real answer ("come back tomorrow, or batch properly") under a generic
-    rate-limit message.
+    Only the per-minute one is worth waiting out. The daily one names itself,
+    and waiting on it burns minutes to fail anyway, so it is raised, not
+    retried. Anything else that is a 429 is treated as the per-minute limit.
     """
     m = str(exc).lower()
-    return "perday" in m or "per day" in m or "requestsperday" in m
+    # "perday" would also substring-match inside "...perminute..."? No; but be
+    # explicit so a future message format cannot blur the two.
+    return ("perday" in m or "per day" in m or "requestsperday" in m) and "perminute" not in m
+
+
+def _retry_delay_seconds(exc: BaseException, fallback: float) -> float:
+    """
+    Pull the server's own retry hint out of a 429.
+
+    Gemini returns it as either `retryDelay: "16s"` or a protobuf-ish
+    `retry_delay { seconds: 16 }`. Honouring it is the difference between
+    retrying at the right moment and retrying too early and failing again,
+    which is exactly what a fixed 10s-first-wait did against a 16s hint.
+    """
+    m = str(exc)
+    match = re.search(r"retry[_ ]?delay['\"]?\s*[:=]\s*['\"]?(\d+(?:\.\d+)?)\s*s", m, re.I)
+    if not match:
+        match = re.search(r"retry_delay\s*\{\s*seconds:\s*(\d+)", m, re.I)
+    if match:
+        return float(match.group(1))
+    return fallback
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -234,6 +389,10 @@ def encode_sync(texts: list[str], api_key: str = "", task_type: str = DOCUMENT) 
         return []
     if EMBED_PROVIDER == "local":
         return _local_encode(texts)
+    if EMBED_PROVIDER == "jina":
+        return _jina_encode(texts, api_key, task_type)
+    if EMBED_PROVIDER == "voyage":
+        return _voyage_encode(texts, api_key, task_type)
     return _gemini_encode(texts, api_key, task_type)
 
 
@@ -269,38 +428,44 @@ def embed_documents(
     """
     Embed many documents, for ingestion.
 
-    BATCHING, NOT PACING
-    ────────────────────
-    Two earlier versions of this function tried to solve the wrong problem. The
-    first retried harder; the second paced slower. Both assumed a per-minute
-    limit. The limit is per DAY, so neither could have worked: no arrangement
-    of sleeps changes how many requests a day contains.
+    TWO LIMITS, COUNTED DIFFERENTLY
+    ───────────────────────────────
+    The free tier enforces a daily cap and a per-minute cap, and they count
+    different things:
 
-    What does change it is how many texts ride along in each request. At 100
-    per request the same 1000-request quota covers 100,000 chunks instead of
-    1000, which is the difference between an afternoon and eleven days.
+      daily       1000 REQUESTS.  Batching 100 texts per request makes this a
+                  non-issue: the whole corpus is a few dozen requests.
+      per-minute  100 TEXTS.      One request of 100 texts spends the entire
+                  minute, so the next request is denied instantly.
 
-    So the retry loop here is deliberately thin. It covers transient blips.
-    A daily exhaustion is not retried at all, because waiting cannot fix it and
-    pretending otherwise hides the real remedy.
+    That second point is the one that is easy to get wrong. Retrying does not
+    help, because the batch already spent the minute. Pacing is what works:
+    EMBED_PACE_SECONDS waits out the window between batches, holding throughput
+    at ~100 texts/minute, which is the free tier's real ceiling.
 
-    The caller's ingest is idempotent, so an interrupted run resumes safely.
+    The retry below is a safety net for the ragged edge of the window, and it
+    honours the server's `retryDelay` rather than a fixed schedule so it lands
+    when the window has actually reopened. Daily exhaustion is raised, not
+    retried. The caller's ingest is idempotent, so an interrupt resumes safely.
     """
     if not texts:
         return []
     if EMBED_PROVIDER == "local":
         return _local_encode(texts)
 
-    batch_size = max(1, min(batch_size, 100))   # 100 is the API maximum
+    # Per-request text cap: Jina has no limit; Voyage 1000; Gemini 100.
+    provider_cap = 10_000 if EMBED_PROVIDER in ("jina", "voyage") else 100
+    batch_size = max(1, min(batch_size, provider_cap))
     out: list[list[float]] = []
 
     i = 0
     while i < len(texts):
         batch = texts[i:i + batch_size]
 
-        for attempt in range(5):
+        max_attempts = 12
+        for attempt in range(max_attempts):
             try:
-                out.extend(_gemini_encode(batch, api_key, DOCUMENT))
+                out.extend(encode_sync(batch, api_key, DOCUMENT))
                 break
             except Exception as exc:  # noqa: BLE001
                 if _is_daily_quota(exc):
@@ -315,13 +480,18 @@ def embed_documents(
                     ) from exc
                 if not _is_rate_limit(exc):
                     raise EmbeddingError(f"Embedding failed at item {i}: {exc}") from exc
-                if attempt == 4:
+                if attempt == max_attempts - 1:
                     raise EmbeddingError(
-                        f"Rate limited at item {i} after 5 attempts. Re-run to "
-                        f"resume; already-embedded files are skipped."
+                        f"Per-minute rate limit at item {i} did not clear after "
+                        f"{max_attempts} attempts. Re-run to resume; already-"
+                        f"embedded files are skipped."
                     ) from exc
-                wait = min(5 * (attempt + 1), 30)
-                logger.info("Rate limited at item %d, waiting %ds", i, wait)
+                hint = _retry_delay_seconds(exc, fallback=65.0)
+                wait = max(hint, 65.0) + attempt * 2
+                logger.info(
+                    "Rate limited at item %d (attempt %d/%d), waiting %.0fs — %s",
+                    i, attempt + 1, max_attempts, wait, exc,
+                )
                 time.sleep(wait)
 
         i += batch_size
@@ -342,4 +512,8 @@ def preload() -> None:
 def describe() -> str:
     if EMBED_PROVIDER == "local":
         return f"local:{LOCAL_EMBED_MODEL} ({EMBED_DIMS}d)"
+    if EMBED_PROVIDER == "jina":
+        return f"jina:{JINA_EMBED_MODEL} ({EMBED_DIMS}d, asymmetric)"
+    if EMBED_PROVIDER == "voyage":
+        return f"voyage:{VOYAGE_EMBED_MODEL} ({EMBED_DIMS}d, asymmetric)"
     return f"gemini:{GEMINI_EMBED_MODEL} ({EMBED_DIMS}d, asymmetric)"

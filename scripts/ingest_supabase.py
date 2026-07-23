@@ -153,13 +153,26 @@ async def main():
         logger.error("DATABASE_URL env var is missing.")
         return
 
-    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if embeddings.EMBED_PROVIDER == "gemini" and not api_key:
-        logger.error(
-            "EMBED_PROVIDER=gemini needs GEMINI_API_KEY for ingestion. "
-            "Set it, or use EMBED_PROVIDER=local."
-        )
-        return
+    if embeddings.EMBED_PROVIDER == "jina":
+        api_key = os.environ.get("JINA_API_KEY", "").strip()
+        if not api_key:
+            logger.error("EMBED_PROVIDER=jina needs JINA_API_KEY. Get one free (no card) at jina.ai.")
+            return
+    elif embeddings.EMBED_PROVIDER == "voyage":
+        api_key = os.environ.get("VOYAGE_API_KEY", "").strip()
+        if not api_key:
+            logger.error("EMBED_PROVIDER=voyage needs VOYAGE_API_KEY for ingestion.")
+            return
+    elif embeddings.EMBED_PROVIDER == "gemini":
+        api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+        if not api_key:
+            logger.error(
+                "EMBED_PROVIDER=gemini needs GEMINI_API_KEY for ingestion. "
+                "Set it, or use EMBED_PROVIDER=local."
+            )
+            return
+    else:
+        api_key = ""
     logger.info("Embedding provider: %s", embeddings.describe())
 
     # Normalize DB URL for asyncpg

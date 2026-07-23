@@ -1,4 +1,8 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
 
 /* ──────────────────────────────────────────────────────────────────────────
    DESIGN TOKENS
@@ -20,7 +24,7 @@
   --surface-hover: #F7F8FA;
 
   /* Lines */
-  --border:        #E5E7EB;
+  --border:            oklch(0.922 0 0);
   --border-strong: #D1D5DB;
 
   /* Text, contrast measured against --surface.
@@ -32,10 +36,14 @@
   --text-subtle:   #6B7280;
 
   /* Accent */
-  --accent:        #1A56DB;
-  --accent-hover:  #1749BC;
-  --accent-soft:   #E8EEFB;
-  --accent-text:   #FFFFFF;
+  /* Brand tokens live in their own namespace. shadcn owns --accent, where
+     "accent" means a subtle hover surface, not a brand colour. Sharing the
+     name meant `shadcn init` silently repainted every primary button
+     near-white. Different concept, different name. */
+  --brand:         #1A56DB;
+  --brand-hover:   #1749BC;
+  --brand-soft:   #E8EEFB;
+  --brand-text:   #FFFFFF;
 
   /* Semantic */
   --danger:        #B42318;
@@ -54,27 +62,75 @@
   --text-base: 15px;
   --text-lg:   17px;
 
-  --radius:    12px;
+  --radius:            0.625rem;
   --radius-sm: 8px;
+  --background:            oklch(1 0 0);
+  --foreground:            oklch(0.145 0 0);
+  --card:            oklch(1 0 0);
+  --card-foreground:            oklch(0.145 0 0);
+  --popover:            oklch(1 0 0);
+  --popover-foreground:            oklch(0.145 0 0);
+  --primary:            oklch(0.205 0 0);
+  --primary-foreground:            oklch(0.985 0 0);
+  --secondary:            oklch(0.97 0 0);
+  --secondary-foreground:            oklch(0.205 0 0);
+  --muted:            oklch(0.97 0 0);
+  --muted-foreground:            oklch(0.556 0 0);
+  --accent-foreground:            oklch(0.205 0 0);
+  --destructive:            oklch(0.577 0.245 27.325);
+  --input:            oklch(0.922 0 0);
+  --ring:            oklch(0.708 0 0);
+  --chart-1:            oklch(0.87 0 0);
+  --chart-2:            oklch(0.556 0 0);
+  --chart-3:            oklch(0.439 0 0);
+  --chart-4:            oklch(0.371 0 0);
+  --chart-5:            oklch(0.269 0 0);
+  --sidebar:            oklch(0.985 0 0);
+  --sidebar-foreground:            oklch(0.145 0 0);
+  --sidebar-primary:            oklch(0.205 0 0);
+  --sidebar-primary-foreground:            oklch(0.985 0 0);
+  --sidebar-accent:            oklch(0.97 0 0);
+  --sidebar-accent-foreground:            oklch(0.205 0 0);
+  --sidebar-border:            oklch(0.922 0 0);
+  --sidebar-ring:            oklch(0.708 0 0);
 }
 
-/* Dark theme. The media query is the default signal; the data attribute lets
-   an explicit toggle win in both directions. */
+/* Dark theme.
+   ─────────────────────────────────────────────────────────────────────────
+   These values ARE the design system's dark surface. They were navy (#0B0F19
+   and up), while the landing page committed to near-black (#050505) with
+   translucent white lines. Two surfaces, two visual languages, one product,
+   which read as unfinished.
+
+   Retuned to the landing's black system so the chat app and the marketing
+   pages are the same material:
+     - surfaces are layered near-blacks, distinct enough that a panel reads
+       against the page without a heavy border
+     - lines are translucent white, so they sit on any surface at the right
+       weight without a second "strong" colour
+     - text is white stepped down by opacity, one hue, three emphases
+     - the blue accent survives, but only for STATE (active, live, primary
+       action), never as decoration
+
+   The media query is the default signal; the data attribute lets an explicit
+   toggle win in both directions. The two blocks are intentionally identical
+   and must be edited together.
+   ───────────────────────────────────────────────────────────────────────── */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg:            #0B0F19;
-    --surface:       #131826;
-    --surface-alt:   #1B2233;
-    --surface-hover: #1B2233;
-    --border:        #262F42;
-    --border-strong: #364155;
-    --text:          #E8EBF2;
-    --text-muted:    #A5AEC0;
-    --text-subtle:   #7C8699;
-    --accent:        #6E9BFF;
-    --accent-hover:  #8AAFFF;
-    --accent-soft:   #1A2440;
-    --accent-text:   #0B0F19;
+    --bg:            #050505;
+    --surface:       #0E0E10;
+    --surface-alt:   #161618;
+    --surface-hover: #1C1C1F;
+    --border:        rgba(255, 255, 255, 0.08);
+    --border-strong: rgba(255, 255, 255, 0.16);
+    --text:          #F5F5F6;
+    --text-muted:    rgba(255, 255, 255, 0.60);
+    --text-subtle:   rgba(255, 255, 255, 0.38);
+    --brand:         #6E9BFF;
+    --brand-hover:   #8AAFFF;
+    --brand-soft:    rgba(110, 155, 255, 0.14);
+    --brand-text:    #06070A;
     --danger:        #FF9A8F;
     --danger-soft:   #2A1614;
     --danger-border: #5B2A24;
@@ -87,19 +143,19 @@
 }
 
 :root[data-theme="dark"] {
-  --bg:            #0B0F19;
-  --surface:       #131826;
-  --surface-alt:   #1B2233;
-  --surface-hover: #1B2233;
-  --border:        #262F42;
-  --border-strong: #364155;
-  --text:          #E8EBF2;
-  --text-muted:    #A5AEC0;
-  --text-subtle:   #7C8699;
-  --accent:        #6E9BFF;
-  --accent-hover:  #8AAFFF;
-  --accent-soft:   #1A2440;
-  --accent-text:   #0B0F19;
+  --bg:            #050505;
+  --surface:       #0E0E10;
+  --surface-alt:   #161618;
+  --surface-hover: #1C1C1F;
+  --border:        rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --text:          #F5F5F6;
+  --text-muted:    rgba(255, 255, 255, 0.60);
+  --text-subtle:   rgba(255, 255, 255, 0.38);
+  --brand:         #6E9BFF;
+  --brand-hover:   #8AAFFF;
+  --brand-soft:    rgba(110, 155, 255, 0.14);
+  --brand-text:    #06070A;
   --danger:        #FF9A8F;
   --danger-soft:   #2A1614;
   --danger-border: #5B2A24;
@@ -113,15 +169,26 @@
 body {
   background-color: var(--bg);
   color: var(--text);
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
-    Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
-  overflow: hidden;
+  /* Was a hardcoded system-ui stack, which silently overrode the webfonts
+     loaded in layout.tsx: they downloaded and were never applied. */
+  font-family: var(--font-source), ui-sans-serif, system-ui, sans-serif;
 }
+
+/* Headings only. Poppins is geometric and wide, which reads well large and
+   cramped small, so body copy stays on Source Sans. */
+h1, h2, h3, h4 {
+  font-family: var(--font-poppins), ui-sans-serif, system-ui, sans-serif;
+}
+
+/* `overflow: hidden` used to live on body, for the chat app's fixed viewport
+   shell. It also stopped the marketing pages scrolling past the fold. Removed
+   rather than scoped: the chat route already sets h-[100dvh] and
+   overflow-hidden on its own root, so the body rule was never doing work. */
 
 /* Keyboard users must be able to see where they are. Nothing previously
    defined a focus ring, so tabbing through the app was invisible. */
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--brand);
   outline-offset: 2px;
   border-radius: 4px;
 }
@@ -201,7 +268,7 @@ body {
 
 .waveform-bar {
   width: 4px;
-  background-color: var(--accent);
+  background-color: var(--brand);
   border-radius: 9999px;
   height: 4px;
   transition: height 0.2s ease;
@@ -260,4 +327,93 @@ body {
   }
 
   .waveform-bar { height: 16px; }
+}
+
+@theme inline {
+  --font-heading:  var(--font-poppins), ui-sans-serif, system-ui, sans-serif;
+  --font-sans:     var(--font-source), ui-sans-serif, system-ui, sans-serif;
+  --color-sidebar-ring:            var(--sidebar-ring);
+  --color-sidebar-border:            var(--sidebar-border);
+  --color-sidebar-accent-foreground:            var(--sidebar-accent-foreground);
+  --color-sidebar-accent:            var(--sidebar-accent);
+  --color-sidebar-primary-foreground:            var(--sidebar-primary-foreground);
+  --color-sidebar-primary:            var(--sidebar-primary);
+  --color-sidebar-foreground:            var(--sidebar-foreground);
+  --color-sidebar:            var(--sidebar);
+  --color-chart-5:            var(--chart-5);
+  --color-chart-4:            var(--chart-4);
+  --color-chart-3:            var(--chart-3);
+  --color-chart-2:            var(--chart-2);
+  --color-chart-1:            var(--chart-1);
+  --color-ring:            var(--ring);
+  --color-input:            var(--input);
+  --color-border:            var(--border);
+  --color-destructive:            var(--destructive);
+  --color-accent-foreground:            var(--accent-foreground);
+  --color-accent:            var(--accent);
+  --color-muted-foreground:            var(--muted-foreground);
+  --color-muted:            var(--muted);
+  --color-secondary-foreground:            var(--secondary-foreground);
+  --color-secondary:            var(--secondary);
+  --color-primary-foreground:            var(--primary-foreground);
+  --color-primary:            var(--primary);
+  --color-popover-foreground:            var(--popover-foreground);
+  --color-popover:            var(--popover);
+  --color-card-foreground:            var(--card-foreground);
+  --color-card:            var(--card);
+  --color-foreground:            var(--foreground);
+  --color-background:            var(--background);
+  --radius-sm:            calc(var(--radius) * 0.6);
+  --radius-md:            calc(var(--radius) * 0.8);
+  --radius-lg:            var(--radius);
+  --radius-xl:            calc(var(--radius) * 1.4);
+  --radius-2xl:            calc(var(--radius) * 1.8);
+  --radius-3xl:            calc(var(--radius) * 2.2);
+  --radius-4xl:            calc(var(--radius) * 2.6);
+}
+
+.dark {
+  --background:            oklch(0.145 0 0);
+  --foreground:            oklch(0.985 0 0);
+  --card:            oklch(0.205 0 0);
+  --card-foreground:            oklch(0.985 0 0);
+  --popover:            oklch(0.205 0 0);
+  --popover-foreground:            oklch(0.985 0 0);
+  --primary:            oklch(0.922 0 0);
+  --primary-foreground:            oklch(0.205 0 0);
+  --secondary:            oklch(0.269 0 0);
+  --secondary-foreground:            oklch(0.985 0 0);
+  --muted:            oklch(0.269 0 0);
+  --muted-foreground:            oklch(0.708 0 0);
+  --accent:            oklch(0.269 0 0);
+  --accent-foreground:            oklch(0.985 0 0);
+  --destructive:            oklch(0.704 0.191 22.216);
+  --border:            oklch(1 0 0 / 10%);
+  --input:            oklch(1 0 0 / 15%);
+  --ring:            oklch(0.556 0 0);
+  --chart-1:            oklch(0.87 0 0);
+  --chart-2:            oklch(0.556 0 0);
+  --chart-3:            oklch(0.439 0 0);
+  --chart-4:            oklch(0.371 0 0);
+  --chart-5:            oklch(0.269 0 0);
+  --sidebar:            oklch(0.205 0 0);
+  --sidebar-foreground:            oklch(0.985 0 0);
+  --sidebar-primary:            oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground:            oklch(0.985 0 0);
+  --sidebar-accent:            oklch(0.269 0 0);
+  --sidebar-accent-foreground:            oklch(0.985 0 0);
+  --sidebar-border:            oklch(1 0 0 / 10%);
+  --sidebar-ring:            oklch(0.556 0 0);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
 }

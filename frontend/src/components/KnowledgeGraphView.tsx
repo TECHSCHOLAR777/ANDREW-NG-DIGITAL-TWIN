@@ -65,9 +65,9 @@ const KnowledgeNodeComponent: React.FC<NodeProps<KnowledgeNode>> = ({
         height:          80,
         borderRadius:    "8px",
         background:      "var(--surface)",
-        borderTop:       selected ? "1.5px solid var(--accent)" : "1px solid var(--border)",
-        borderRight:     selected ? "1.5px solid var(--accent)" : "1px solid var(--border)",
-        borderBottom:    selected ? "1.5px solid var(--accent)" : "1px solid var(--border)",
+        borderTop:       selected ? "1.5px solid var(--brand)" : "1px solid var(--border)",
+        borderRight:     selected ? "1.5px solid var(--brand)" : "1px solid var(--border)",
+        borderBottom:    selected ? "1.5px solid var(--brand)" : "1px solid var(--border)",
         borderLeft:      `6px solid ${color}`,
         boxShadow:       data.hopDistance === 0
           ? `0 4px 12px rgba(0,0,0,0.06), 0 0 10px ${color}22`
@@ -385,8 +385,8 @@ const NodeDetailPanel: React.FC<NodeDetailProps> = ({ node, allEdges, allNodes, 
             width: "100%",
             marginTop: 14,
             padding: "8px 12px",
-            background: "var(--accent)",
-            border: "1px solid var(--accent)",
+            background: "var(--brand)",
+            border: "1px solid var(--brand)",
             borderRadius: 8,
             color: "var(--surface)",
             fontSize: 12,
@@ -396,10 +396,10 @@ const NodeDetailPanel: React.FC<NodeDetailProps> = ({ node, allEdges, allNodes, 
             textAlign: "center",
           }}
           onMouseEnter={(e) => {
-            e.currentTarget.style.background = "var(--accent)E0";
+            e.currentTarget.style.background = "var(--brand)E0";
           }}
           onMouseLeave={(e) => {
-            e.currentTarget.style.background = "var(--accent)";
+            e.currentTarget.style.background = "var(--brand)";
           }}
         >
           Ask Andrew about this concept
@@ -501,7 +501,7 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
             backdropFilter: "blur(4px)",
           }}
         >
-          <div style={{ color: "var(--accent)", fontSize: 14, fontWeight: 500 }}>
+          <div style={{ color: "var(--brand)", fontSize: 14, fontWeight: 500 }}>
             Updating knowledge graph…
           </div>
         </div>
