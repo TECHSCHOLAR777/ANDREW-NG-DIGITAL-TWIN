@@ -1,6 +1,6 @@
 # Andrew Ng Digital Twin 🎓🤖
 
-An interactive, AI-powered digital twin of Professor Andrew Ng designed to teach machine learning concepts. Rather than a standard, stateless RAG chatbot, this system implements a dynamic student-personality knowledge graph that tracks your comprehension, matches explanations to your background (PhD vs. Beginner), and remembers you across chat sessions.
+An interactive, AI-powered digital twin of Professor Andrew Ng — a grounded, unofficial recreation of his public knowledge, reasoning, and voice. It is built for researchers, engineers, founders, product and business leaders, students, and the curious; teaching ML is one of its behaviours, not its whole purpose. Rather than a standard, stateless RAG chatbot, this system implements a dynamic contextual-memory knowledge graph that tracks the context you share, matches depth to your background (PhD vs. beginner, founder vs. researcher), and remembers you across chat sessions.
 
 ---
 
@@ -8,7 +8,7 @@ An interactive, AI-powered digital twin of Professor Andrew Ng designed to teach
 
 When you interact with the digital twin:
 1. **Client Headers & BYOK:** The frontend communicates with the FastAPI backend using standard UUID-based multi-tenancy (`X-Tenant-Id`) and an optional client-supplied key (`X-Gemini-Api-Key`). These are persisted in browser local storage.
-2. **Hybrid RAG Retrieval:** The backend embeds user queries using a preloaded local **SentenceTransformer (`all-mpnet-base-v2`)** model producing **768-dimensional vectors**. It runs a Supabase PostgreSQL function combining vector cosine similarity (via `pgvector`) and Full-Text Search (FTS) using **Reciprocal Rank Fusion (RRF)**.
+2. **Hybrid RAG Retrieval:** The backend embeds user queries with the configured embedding provider (default **Jina `jina-embeddings-v3`, 1024-dimensional vectors** — see migration 014; a local `all-mpnet-base-v2` SentenceTransformer remains an option for offline/dev). Query and corpus vectors share the same space. It runs a PostgreSQL function combining vector cosine similarity (via `pgvector`) and Full-Text Search (FTS) using **Reciprocal Rank Fusion (RRF)**.
 3. **Dual-Scope Memory:**
    - **Cross-Session Recall:** A recursive 2-hop CTE database query retrieves the student's global learning state across all chat history associated with the `X-Tenant-Id`.
    - **Session-Scoped Visual Graph:** The interactive graph displays only the triplets discovered or updated in the current active chat session.
@@ -230,12 +230,12 @@ against pgvector, so ordering and syntax errors are caught before Supabase.
    ```bash
    python scripts/ingest_supabase.py
    ```
-   *This loads files under `data/cleaned/`, computes 768-dim embeddings locally via SentenceTransformers, and writes them to your database.*
+   *This loads files under `data/cleaned/`, computes embeddings with the configured provider (default Jina, 1024-dim — set `EMBED_PROVIDER` and the matching key in `.env`), and writes them to your database. Query-time and ingest-time embeddings must use the same provider so the vectors share one space.*
 3. Run the FastAPI backend:
    ```bash
    python -m uvicorn backend.app.main:app --reload
    ```
-   *The server preloads the `all-mpnet-base-v2` model on startup and runs on `http://127.0.0.1:8000`.*
+   *The server runs on `http://127.0.0.1:8000`. With the default Jina provider it calls the Jina API for embeddings; with `EMBED_PROVIDER=local` it preloads `all-mpnet-base-v2` on startup instead.*
 
 ### 2. Cloned-Voice TTS (Optional)
 To enable high-fidelity voice cloning rather than generic browser TTS:
