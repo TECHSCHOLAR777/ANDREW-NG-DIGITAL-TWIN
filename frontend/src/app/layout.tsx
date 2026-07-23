@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { Poppins, Source_Sans_3 } from "next/font/google";
 import { cn } from "@/lib/utils";
+import { ThemeProvider, themeInitScript } from "@/components/theme-provider";
 
 /**
  * Typography follows the two sites this project's audience already reads.
@@ -34,7 +35,7 @@ const sans = Source_Sans_3({
 export const metadata: Metadata = {
   title: "Andrew Ng Digital Twin",
   description:
-    "An ML tutor grounded in Andrew Ng's own teaching, with knowledge graph memory. An educational project, not affiliated with or endorsed by Andrew Ng.",
+    "Converse with a grounded, unofficial AI recreation of Andrew Ng's public knowledge, reasoning, and voice — with contextual memory across sessions. An academic project, not affiliated with or endorsed by Andrew Ng.",
 };
 
 export default function RootLayout({
@@ -45,6 +46,9 @@ export default function RootLayout({
   return (
     <html
       lang="en"
+      // The theme script mutates data-theme before React hydrates; without
+      // this, React warns about the server/client attribute mismatch.
+      suppressHydrationWarning
       className={cn(
         "h-full antialiased",
         "font-sans",
@@ -52,7 +56,13 @@ export default function RootLayout({
         heading.variable
       )}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <head>
+        {/* Runs before first paint so there is no flash of the wrong theme. */}
+        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+      </head>
+      <body className="min-h-full flex flex-col">
+        <ThemeProvider>{children}</ThemeProvider>
+      </body>
     </html>
   );
 }

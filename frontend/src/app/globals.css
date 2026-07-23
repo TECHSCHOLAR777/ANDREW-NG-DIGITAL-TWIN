@@ -2,50 +2,59 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
-@custom-variant dark (&:is(.dark *));
+/* Tailwind's `dark:` variant is driven by the resolved theme attribute, not a
+   `.dark` class. A no-flash inline script (see layout.tsx) always stamps
+   data-theme="dark|light" on <html> before first paint, so every surface —
+   marketing and app — keys off one signal. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 /* ──────────────────────────────────────────────────────────────────────────
-   DESIGN TOKENS
+   ONE SEMANTIC TOKEN SYSTEM
 
-   Colours, spacing and type were previously hardcoded hex values inline on
-   every element (bg-[#1A56DB], border-[#E5E7EB], and so on). That kept the
-   visual language consistent only by discipline, and it foreclosed dark mode:
-   supporting it would have meant editing every element in the app.
+   Previously three vocabularies fought here: custom --bg/--surface/--brand
+   (a blue brand), shadcn's oklch --background/--primary (dark under a .dark
+   CLASS the app never set), and marketing routes hardcoding #050505 and
+   translucent white inline. They could not share a theme.
 
-   Tokens fix both. Components reference var(--x) and a theme swap is one block
-   of overrides. Students working at night are a core audience for a learning
-   tool, so this is not decoration.
+   Now there is one set of base tokens, retuned to the design system:
+   black/graphite/warm-white dominant, with a SCARCE bio-orange accent that
+   means active intelligence, live voice, primary action, and selected paths —
+   never general decoration. shadcn's tokens are aliases that reference the
+   base tokens through var(), so a theme swap overrides ~30 base values and the
+   shadcn layer follows automatically. Light and dark are each designed, not
+   inversions of one another.
    ────────────────────────────────────────────────────────────────────────── */
 :root {
+  /* ── Base tokens: LIGHT (warm laboratory white) ── */
   /* Surfaces */
-  --bg:            #F7F8FA;
-  --surface:       #FFFFFF;
-  --surface-alt:   #F3F4F6;
-  --surface-hover: #F7F8FA;
+  --bg:            #F3F1EC;
+  --bg-recessed:   #ECE9E2;
+  --surface:       #FAF9F6;
+  --surface-alt:   #EFEDE7;
+  --surface-hover: #E7E4DC;
+
+  /* Glass (elevation material, not a universal card) */
+  --surface-glass:   rgba(250, 249, 246, 0.66);
+  --glass-highlight: rgba(255, 255, 255, 0.70);
+  --glass-shadow:    rgba(23, 22, 20, 0.10);
 
   /* Lines */
-  --border:            oklch(0.922 0 0);
-  --border-strong: #D1D5DB;
+  --border:        rgba(23, 22, 20, 0.12);
+  --border-strong: rgba(23, 22, 20, 0.20);
 
-  /* Text, contrast measured against --surface.
-     --text-muted was raised from #6B7280 (4.8:1) to #4B5563 (7.6:1) because it
-     carried real information at 11 and 13px. --text-subtle keeps the old value
-     and is reserved for decorative or large text only. */
-  --text:          #111827;
-  --text-muted:    #4B5563;
-  --text-subtle:   #6B7280;
+  /* Text (contrast measured against --surface) */
+  --text:          #171614;
+  --text-muted:    #625F59;
+  --text-subtle:   #89857D;
 
-  /* Accent */
-  /* Brand tokens live in their own namespace. shadcn owns --accent, where
-     "accent" means a subtle hover surface, not a brand colour. Sharing the
-     name meant `shadcn init` silently repainted every primary button
-     near-white. Different concept, different name. */
-  --brand:         #1A56DB;
-  --brand-hover:   #1749BC;
-  --brand-soft:   #E8EEFB;
-  --brand-text:   #FFFFFF;
+  /* Bio-orange accent. Light uses a copper edge with less glow. */
+  --brand:         #E8620E;
+  --brand-hover:   #C9530B;
+  --brand-soft:    rgba(232, 98, 14, 0.10);
+  --brand-text:    #FFFFFF;
+  --brand-gradient: linear-gradient(120deg, #F59A4B 0%, #F0700F 52%, #C9450F 100%);
 
-  /* Semantic */
+  /* Semantic (used only when copy/icon cannot carry the meaning alone) */
   --danger:        #B42318;
   --danger-soft:   #FEF3F2;
   --danger-border: #FECDCA;
@@ -54,83 +63,96 @@
   --warn-border:   #FDE68A;
   --ok:            #027A48;
   --ok-soft:       #ECFDF3;
+  --info:          #1D4ED8;
+  --info-soft:     #EEF2FF;
 
-  /* Type scale. Body was 13px, a dashboard convention rather than a reading
-     one, in a product whose main content is paragraphs of explanation. */
+  /* Context Graph — mostly monochrome; orange only for active/selected. */
+  --graph-node:        #2A2723;
+  --graph-node-muted:  #625F59;
+  --graph-node-anchor: #171614;
+  --graph-edge:        rgba(23, 22, 20, 0.22);
+  --graph-active:      #E8620E;
+
+  /* Focus */
+  --focus:         var(--brand);
+
+  /* Type scale. Body sits at a reading size, not a dashboard 13px. */
   --text-xs:   11px;
   --text-sm:   13px;
   --text-base: 15px;
   --text-lg:   17px;
 
-  --radius:            0.625rem;
+  /* Geometry */
+  --radius:    0.625rem;
   --radius-sm: 8px;
-  --background:            oklch(1 0 0);
-  --foreground:            oklch(0.145 0 0);
-  --card:            oklch(1 0 0);
-  --card-foreground:            oklch(0.145 0 0);
-  --popover:            oklch(1 0 0);
-  --popover-foreground:            oklch(0.145 0 0);
-  --primary:            oklch(0.205 0 0);
-  --primary-foreground:            oklch(0.985 0 0);
-  --secondary:            oklch(0.97 0 0);
-  --secondary-foreground:            oklch(0.205 0 0);
-  --muted:            oklch(0.97 0 0);
-  --muted-foreground:            oklch(0.556 0 0);
-  --accent-foreground:            oklch(0.205 0 0);
-  --destructive:            oklch(0.577 0.245 27.325);
-  --input:            oklch(0.922 0 0);
-  --ring:            oklch(0.708 0 0);
-  --chart-1:            oklch(0.87 0 0);
-  --chart-2:            oklch(0.556 0 0);
-  --chart-3:            oklch(0.439 0 0);
-  --chart-4:            oklch(0.371 0 0);
-  --chart-5:            oklch(0.269 0 0);
-  --sidebar:            oklch(0.985 0 0);
-  --sidebar-foreground:            oklch(0.145 0 0);
-  --sidebar-primary:            oklch(0.205 0 0);
-  --sidebar-primary-foreground:            oklch(0.985 0 0);
-  --sidebar-accent:            oklch(0.97 0 0);
-  --sidebar-accent-foreground:            oklch(0.205 0 0);
-  --sidebar-border:            oklch(0.922 0 0);
-  --sidebar-ring:            oklch(0.708 0 0);
+
+  /* ── shadcn / Base UI aliases — reference the base tokens above.
+        var() resolves at use time, so overriding a base token in a dark block
+        re-resolves every alias that points at it. Define once, here only. ── */
+  --background:            var(--bg);
+  --foreground:            var(--text);
+  --card:                  var(--surface);
+  --card-foreground:       var(--text);
+  --popover:               var(--surface);
+  --popover-foreground:    var(--text);
+  --primary:               var(--brand);
+  --primary-foreground:    var(--brand-text);
+  --secondary:             var(--surface-alt);
+  --secondary-foreground:  var(--text);
+  --muted:                 var(--surface-alt);
+  --muted-foreground:      var(--text-muted);
+  --accent:                var(--surface-hover);
+  --accent-foreground:     var(--text);
+  --destructive:           var(--danger);
+  --input:                 var(--border);
+  --ring:                  var(--brand);
+
+  --chart-1:   #E8620E;
+  --chart-2:   var(--text-muted);
+  --chart-3:   var(--graph-node);
+  --chart-4:   var(--border-strong);
+  --chart-5:   var(--text-subtle);
+
+  --sidebar:                     var(--surface);
+  --sidebar-foreground:          var(--text);
+  --sidebar-primary:             var(--brand);
+  --sidebar-primary-foreground:  var(--brand-text);
+  --sidebar-accent:              var(--surface-hover);
+  --sidebar-accent-foreground:   var(--text);
+  --sidebar-border:              var(--border);
+  --sidebar-ring:                var(--brand);
 }
 
-/* Dark theme.
-   ─────────────────────────────────────────────────────────────────────────
-   These values ARE the design system's dark surface. They were navy (#0B0F19
-   and up), while the landing page committed to near-black (#050505) with
-   translucent white lines. Two surfaces, two visual languages, one product,
-   which read as unfinished.
-
-   Retuned to the landing's black system so the chat app and the marketing
-   pages are the same material:
-     - surfaces are layered near-blacks, distinct enough that a panel reads
-       against the page without a heavy border
-     - lines are translucent white, so they sit on any surface at the right
-       weight without a second "strong" colour
-     - text is white stepped down by opacity, one hue, three emphases
-     - the blue accent survives, but only for STATE (active, live, primary
-       action), never as decoration
-
-   The media query is the default signal; the data attribute lets an explicit
-   toggle win in both directions. The two blocks are intentionally identical
-   and must be edited together.
-   ───────────────────────────────────────────────────────────────────────── */
+/* ── Base tokens: DARK (cinematic near-black) ──
+   Only the base tokens are overridden; shadcn aliases in :root follow through
+   var(). The media query is the pre-hydration default; the data attribute lets
+   the explicit toggle win. These two blocks are intentionally identical and
+   MUST be edited together. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg:            #050505;
+    --bg-recessed:   #08080A;
     --surface:       #0E0E10;
-    --surface-alt:   #161618;
+    --surface-alt:   #151517;
     --surface-hover: #1C1C1F;
-    --border:        rgba(255, 255, 255, 0.08);
-    --border-strong: rgba(255, 255, 255, 0.16);
-    --text:          #F5F5F6;
-    --text-muted:    rgba(255, 255, 255, 0.60);
-    --text-subtle:   rgba(255, 255, 255, 0.38);
-    --brand:         #6E9BFF;
-    --brand-hover:   #8AAFFF;
-    --brand-soft:    rgba(110, 155, 255, 0.14);
-    --brand-text:    #06070A;
+
+    --surface-glass:   rgba(16, 16, 18, 0.58);
+    --glass-highlight: rgba(255, 255, 255, 0.06);
+    --glass-shadow:    rgba(0, 0, 0, 0.45);
+
+    --border:        rgba(255, 255, 255, 0.10);
+    --border-strong: rgba(255, 255, 255, 0.18);
+
+    --text:          #F4F3EF;
+    --text-muted:    #AAA7A1;
+    --text-subtle:   #74716C;
+
+    --brand:         #FF7A1A;
+    --brand-hover:   #FF9040;
+    --brand-soft:    rgba(255, 122, 26, 0.14);
+    --brand-text:    #0A0603;
+    --brand-gradient: linear-gradient(120deg, #FFB35C 0%, #FF7A1A 52%, #D94A12 100%);
+
     --danger:        #FF9A8F;
     --danger-soft:   #2A1614;
     --danger-border: #5B2A24;
@@ -139,23 +161,47 @@
     --warn-border:   #5B4620;
     --ok:            #6EE7B7;
     --ok-soft:       #10281F;
+    --info:          #93B4FF;
+    --info-soft:     rgba(147, 180, 255, 0.12);
+
+    --graph-node:        #E9E7E1;
+    --graph-node-muted:  #AAA7A1;
+    --graph-node-anchor: #F4F3EF;
+    --graph-edge:        rgba(255, 255, 255, 0.18);
+    --graph-active:      #FF7A1A;
   }
 }
 
-:root[data-theme="dark"] {
+/* `.theme-dark` scopes the dark tokens to a subtree, reusing the exact same
+   declaration block (zero duplication). Marketing routes that have not yet been
+   rebuilt as theme-aware surfaces wrap themselves in it so they stay
+   intentionally cinematic-dark and match the token-based header/footer. Their
+   redesign phases drop the wrapper and consume the global theme. */
+:root[data-theme="dark"],
+.theme-dark {
   --bg:            #050505;
+  --bg-recessed:   #08080A;
   --surface:       #0E0E10;
-  --surface-alt:   #161618;
+  --surface-alt:   #151517;
   --surface-hover: #1C1C1F;
-  --border:        rgba(255, 255, 255, 0.08);
-  --border-strong: rgba(255, 255, 255, 0.16);
-  --text:          #F5F5F6;
-  --text-muted:    rgba(255, 255, 255, 0.60);
-  --text-subtle:   rgba(255, 255, 255, 0.38);
-  --brand:         #6E9BFF;
-  --brand-hover:   #8AAFFF;
-  --brand-soft:    rgba(110, 155, 255, 0.14);
-  --brand-text:    #06070A;
+
+  --surface-glass:   rgba(16, 16, 18, 0.58);
+  --glass-highlight: rgba(255, 255, 255, 0.06);
+  --glass-shadow:    rgba(0, 0, 0, 0.45);
+
+  --border:        rgba(255, 255, 255, 0.10);
+  --border-strong: rgba(255, 255, 255, 0.18);
+
+  --text:          #F4F3EF;
+  --text-muted:    #AAA7A1;
+  --text-subtle:   #74716C;
+
+  --brand:         #FF7A1A;
+  --brand-hover:   #FF9040;
+  --brand-soft:    rgba(255, 122, 26, 0.14);
+  --brand-text:    #0A0603;
+  --brand-gradient: linear-gradient(120deg, #FFB35C 0%, #FF7A1A 52%, #D94A12 100%);
+
   --danger:        #FF9A8F;
   --danger-soft:   #2A1614;
   --danger-border: #5B2A24;
@@ -164,31 +210,33 @@
   --warn-border:   #5B4620;
   --ok:            #6EE7B7;
   --ok-soft:       #10281F;
+  --info:          #93B4FF;
+  --info-soft:     rgba(147, 180, 255, 0.12);
+
+  --graph-node:        #E9E7E1;
+  --graph-node-muted:  #AAA7A1;
+  --graph-node-anchor: #F4F3EF;
+  --graph-edge:        rgba(255, 255, 255, 0.18);
+  --graph-active:      #FF7A1A;
 }
 
 body {
   background-color: var(--bg);
   color: var(--text);
-  /* Was a hardcoded system-ui stack, which silently overrode the webfonts
-     loaded in layout.tsx: they downloaded and were never applied. */
+  /* Explicit stack; the previous system-ui default silently overrode the
+     webfonts loaded in layout.tsx. */
   font-family: var(--font-source), ui-sans-serif, system-ui, sans-serif;
 }
 
-/* Headings only. Poppins is geometric and wide, which reads well large and
-   cramped small, so body copy stays on Source Sans. */
+/* Headings only. Poppins is geometric and wide — good large, poor small — so
+   body copy stays on Source Sans. */
 h1, h2, h3, h4 {
   font-family: var(--font-poppins), ui-sans-serif, system-ui, sans-serif;
 }
 
-/* `overflow: hidden` used to live on body, for the chat app's fixed viewport
-   shell. It also stopped the marketing pages scrolling past the fold. Removed
-   rather than scoped: the chat route already sets h-[100dvh] and
-   overflow-hidden on its own root, so the body rule was never doing work. */
-
-/* Keyboard users must be able to see where they are. Nothing previously
-   defined a focus ring, so tabbing through the app was invisible. */
+/* Keyboard users must see where they are, in both themes. */
 :focus-visible {
-  outline: 2px solid var(--brand);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
   border-radius: 4px;
 }
@@ -198,14 +246,17 @@ h1, h2, h3, h4 {
   font-size: var(--text-base);
   line-height: 1.65;
 }
-
 .message-prose code { font-size: 0.9em; }
 
-/* Surfaces */
+/* ── Surfaces ── */
 .glass-panel {
-  background-color: var(--surface);
+  background-color: var(--surface-glass);
+  backdrop-filter: blur(16px) saturate(1.4);
+  -webkit-backdrop-filter: blur(16px) saturate(1.4);
   border: 1px solid var(--border);
-  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
+  box-shadow:
+    inset 0 1px 0 0 var(--glass-highlight),
+    0 8px 30px -12px var(--glass-shadow);
 }
 
 .glass-card {
@@ -213,10 +264,18 @@ h1, h2, h3, h4 {
   border: 1px solid var(--border);
 }
 
-.glass-node-primary   { box-shadow: 0 4px 12px rgba(26, 86, 219, 0.08); }
+.glass-node-primary   { box-shadow: 0 4px 16px rgba(255, 122, 26, 0.10); }
 .glass-node-secondary { box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05); }
 
-/* Scrollbars */
+/* Scarce orange gradient, for text edges and highlights only. */
+.text-gradient-brand {
+  background: var(--brand-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* ── Scrollbars ── */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: var(--surface-alt); }
 ::-webkit-scrollbar-thumb {
@@ -224,7 +283,6 @@ h1, h2, h3, h4 {
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-subtle); }
-
 .chat-scrollbar { overflow-y: auto; }
 
 @keyframes spin {
@@ -236,7 +294,6 @@ h1, h2, h3, h4 {
   0%, 100% { opacity: 0.85; }
   50%      { opacity: 1; }
 }
-
 .loading-glow { animation: pulse-glow 2s infinite ease-in-out; }
 
 /* Typing indicator, shown while the first token is still in flight. */
@@ -255,9 +312,7 @@ h1, h2, h3, h4 {
   30%           { opacity: 1;    transform: translateY(-3px); }
 }
 
-/* ──────────────────────────────────────────────────
-   Voice waveform
-   ────────────────────────────────────────────────── */
+/* ── Voice waveform (supports the portrait, never replaces it) ── */
 .waveform-container {
   display: flex;
   align-items: center;
@@ -265,7 +320,6 @@ h1, h2, h3, h4 {
   gap: 6px;
   height: 48px;
 }
-
 .waveform-bar {
   width: 4px;
   background-color: var(--brand);
@@ -273,14 +327,11 @@ h1, h2, h3, h4 {
   height: 4px;
   transition: height 0.2s ease;
 }
-
 .waveform-listening .waveform-bar { animation: bounce-waveform 1s ease-in-out infinite; }
-
 @keyframes bounce-waveform {
   0%, 100% { height: 4px; }
   50%      { height: 32px; }
 }
-
 .bar-1 { animation-delay: 0.1s;  opacity: 0.6; }
 .bar-2 { animation-delay: 0.22s; opacity: 0.8; }
 .bar-3 { animation-delay: 0.35s; opacity: 0.9; }
@@ -290,14 +341,11 @@ h1, h2, h3, h4 {
 .bar-7 { animation-delay: 0.25s; opacity: 0.8; }
 .bar-8 { animation-delay: 0.38s; opacity: 0.7; }
 .bar-9 { animation-delay: 0.12s; opacity: 0.5; }
-
 .waveform-thinking .waveform-bar { animation: pulse-waveform 0.8s ease-in-out infinite; }
-
 @keyframes pulse-waveform {
   0%, 100% { height: 8px; }
   50%      { height: 16px; }
 }
-
 .waveform-speaking .waveform-bar { animation: bounce-waveform 0.6s ease-in-out infinite; }
 .waveform-speaking .bar-1 { animation-delay: 0.05s; }
 .waveform-speaking .bar-2 { animation-delay: 0.12s; }
@@ -309,13 +357,8 @@ h1, h2, h3, h4 {
 .waveform-speaking .bar-8 { animation-delay: 0.22s; }
 .waveform-speaking .bar-9 { animation-delay: 0.06s; }
 
-/* ──────────────────────────────────────────────────
-   Reduced motion
-
-   Vestibular disorders make looping animation genuinely unpleasant, and this
-   interface runs several at once. Everything decorative stops; the waveform
-   keeps a static presence so voice state stays legible without moving.
-   ────────────────────────────────────────────────── */
+/* ── Reduced motion — vestibular safety. Everything decorative stops; the
+   waveform keeps a static presence so voice state stays legible. ── */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -325,27 +368,26 @@ h1, h2, h3, h4 {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
-
   .waveform-bar { height: 16px; }
 }
 
 @theme inline {
   --font-heading:  var(--font-poppins), ui-sans-serif, system-ui, sans-serif;
   --font-sans:     var(--font-source), ui-sans-serif, system-ui, sans-serif;
-  --color-sidebar-ring:            var(--sidebar-ring);
-  --color-sidebar-border:            var(--sidebar-border);
-  --color-sidebar-accent-foreground:            var(--sidebar-accent-foreground);
-  --color-sidebar-accent:            var(--sidebar-accent);
-  --color-sidebar-primary-foreground:            var(--sidebar-primary-foreground);
+  --color-sidebar-ring:               var(--sidebar-ring);
+  --color-sidebar-border:             var(--sidebar-border);
+  --color-sidebar-accent-foreground:  var(--sidebar-accent-foreground);
+  --color-sidebar-accent:             var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
   --color-sidebar-primary:            var(--sidebar-primary);
-  --color-sidebar-foreground:            var(--sidebar-foreground);
-  --color-sidebar:            var(--sidebar);
+  --color-sidebar-foreground:         var(--sidebar-foreground);
+  --color-sidebar:                    var(--sidebar);
   --color-chart-5:            var(--chart-5);
   --color-chart-4:            var(--chart-4);
   --color-chart-3:            var(--chart-3);
   --color-chart-2:            var(--chart-2);
   --color-chart-1:            var(--chart-1);
-  --color-ring:            var(--ring);
+  --color-ring:              var(--ring);
   --color-input:            var(--input);
   --color-border:            var(--border);
   --color-destructive:            var(--destructive);
@@ -363,6 +405,13 @@ h1, h2, h3, h4 {
   --color-card:            var(--card);
   --color-foreground:            var(--foreground);
   --color-background:            var(--background);
+  /* Brand + semantic, exposed as Tailwind color utilities (bg-brand, etc.) */
+  --color-brand:            var(--brand);
+  --color-brand-soft:       var(--brand-soft);
+  --color-danger:           var(--danger);
+  --color-warn:             var(--warn);
+  --color-ok:               var(--ok);
+  --color-info:             var(--info);
   --radius-sm:            calc(var(--radius) * 0.6);
   --radius-md:            calc(var(--radius) * 0.8);
   --radius-lg:            var(--radius);
@@ -370,40 +419,6 @@ h1, h2, h3, h4 {
   --radius-2xl:            calc(var(--radius) * 1.8);
   --radius-3xl:            calc(var(--radius) * 2.2);
   --radius-4xl:            calc(var(--radius) * 2.6);
-}
-
-.dark {
-  --background:            oklch(0.145 0 0);
-  --foreground:            oklch(0.985 0 0);
-  --card:            oklch(0.205 0 0);
-  --card-foreground:            oklch(0.985 0 0);
-  --popover:            oklch(0.205 0 0);
-  --popover-foreground:            oklch(0.985 0 0);
-  --primary:            oklch(0.922 0 0);
-  --primary-foreground:            oklch(0.205 0 0);
-  --secondary:            oklch(0.269 0 0);
-  --secondary-foreground:            oklch(0.985 0 0);
-  --muted:            oklch(0.269 0 0);
-  --muted-foreground:            oklch(0.708 0 0);
-  --accent:            oklch(0.269 0 0);
-  --accent-foreground:            oklch(0.985 0 0);
-  --destructive:            oklch(0.704 0.191 22.216);
-  --border:            oklch(1 0 0 / 10%);
-  --input:            oklch(1 0 0 / 15%);
-  --ring:            oklch(0.556 0 0);
-  --chart-1:            oklch(0.87 0 0);
-  --chart-2:            oklch(0.556 0 0);
-  --chart-3:            oklch(0.439 0 0);
-  --chart-4:            oklch(0.371 0 0);
-  --chart-5:            oklch(0.269 0 0);
-  --sidebar:            oklch(0.205 0 0);
-  --sidebar-foreground:            oklch(0.985 0 0);
-  --sidebar-primary:            oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground:            oklch(0.985 0 0);
-  --sidebar-accent:            oklch(0.269 0 0);
-  --sidebar-accent-foreground:            oklch(0.985 0 0);
-  --sidebar-border:            oklch(1 0 0 / 10%);
-  --sidebar-ring:            oklch(0.556 0 0);
 }
 
 @layer base {
