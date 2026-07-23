@@ -615,157 +615,6 @@ export default function ChatPage() {
     };
   };
 
-  // Voice Speech (TTS)
-  const speakText = (text: string, onSpeechFinished?: () => void) => {
-    const isVoiceActive = voiceStateRef.current !== "inactive";
-    if (!readAloudEnabled && !isVoiceActive) return;
-
-    // Stop any running speech first
-    stopSpeaking();
-
-    // Strip formatting characters, but keep hyphens INSIDE words. The old
-    // pattern removed every hyphen, so "state-of-the-art" became
-    // "stateoftheart" and the TTS model mispronounced it.
-    let cleanText = text
-      .replace(/[*#`]/g, "")
-      .replace(/(^|\s)[-_]+(?=\s|$)/g, "$1")   // standalone dashes only
-      .replace(/_(\w)/g, "$1")                  // markdown emphasis underscores
-      .trim();
-    // Clean latex math symbols
-    const greekLetters: Record<string, string> = {
-      '\\alpha': 'alpha',
-      '\\beta': 'beta',
-      '\\gamma': 'gamma',
-      '\\delta': 'delta',
-      '\\epsilon': 'epsilon',
-      '\\zeta': 'zeta',
-      '\\eta': 'eta',
-      '\\theta': 'theta',
-      '\\iota': 'iota',
-      '\\kappa': 'kappa',
-      '\\lambda': 'lambda',
-      '\\mu': 'mu',
-      '\\nu': 'nu',
-      '\\xi': 'xi',
-      '\\pi': 'pi',
-      '\\rho': 'rho',
-      '\\sigma': 'sigma',
-      '\\tau': 'tau',
-      '\\upsilon': 'upsilon',
-      '\\phi': 'phi',
-      '\\chi': 'chi',
-      '\\psi': 'psi',
-      '\\omega': 'omega',
-    };
-    for (const [latex, name] of Object.entries(greekLetters)) {
-      cleanText = cleanText.replace(new RegExp(`\\$?${latex.replace('\\', '\\\\')}\\$?`, 'g'), name);
-    }
-    cleanText = cleanText.replace(/\$([^$]+)\$/g, '$1');
-
-    // Content-adaptive speed: auto-slow down for complex equations or code blocks
-    let dynamicSpeed = ttsSpeed;
-    if (ttsSpeed === 1.0) {
-      const hasMathOrCode = /```|[\$\\\{\}\_\]\[\^=+\-*\/]/.test(text) && text.length > 50;
-      if (hasMathOrCode) {
-        dynamicSpeed = 0.88; // Slow down slightly for math and code formulations
-      }
-    }
-
-    // Split text into sentences using lookbehind pattern
-    const rawSentences = cleanText.split(/(?<=[.!?])\s+/);
-    const sentences = rawSentences.map(s => s.trim()).filter(s => s.length > 0);
-
-    if (sentences.length === 0) {
-      if (onSpeechFinished) onSpeechFinished();
-      return;
-    }
-
-    // TTS is now a POST with a JSON body (text no longer leaks into access
-    // logs / browser history via the query string) and requires the tenant
-    // header. Audio elements can't POST, so each sentence is fetched as a
-    // blob and played from an object URL. Prefetch of the next sentence is
-    // preserved; an AbortController cancels everything on interruption.
-    const controller = new AbortController();
-    ttsAbortRef.current = controller;
-    isPlayingRef.current = true;
-
-    const queue = sentences.map(s => ({
-      text: s,
-      urlPromise: null as Promise<string> | null,
-    }));
-
-    const fetchSentenceAudio = async (sentence: string): Promise<string> => {
-      const res = await fetch(`${API_BASE_URL}/api/v1/chat/tts`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Tenant-Id": tenantId,
-        },
-        // Speed is requested at synthesis time so the cloned voice keeps its
-        // pitch and formants, instead of being resampled on playback.
-        body: JSON.stringify({ text: sentence, speed: dynamicSpeed }),
-        signal: controller.signal,
-      });
-      if (!res.ok) throw new Error(`TTS failed (${res.status})`);
-      const blob = await res.blob();
-      return URL.createObjectURL(blob);
-    };
-
-    const ensureFetch = (i: number) => {
-      if (i < queue.length && !queue[i].urlPromise) {
-        queue[i].urlPromise = fetchSentenceAudio(queue[i].text);
-      }
-    };
-
-    const playQueueIndex = async (index: number) => {
-      if (!isPlayingRef.current || index >= queue.length) {
-        isPlayingRef.current = false;
-        if (onSpeechFinished) onSpeechFinished();
-        return;
-      }
-
-      ensureFetch(index);
-      ensureFetch(index + 1); // prefetch next while current plays
-
-      let objectUrl: string;
-      try {
-        objectUrl = await queue[index].urlPromise!;
-      } catch (err) {
-        if (controller.signal.aborted) return; // interrupted — stop quietly
-        console.error("TTS fetch failed for sentence:", queue[index].text, err);
-        playQueueIndex(index + 1);
-        return;
-      }
-
-      if (!isPlayingRef.current || controller.signal.aborted) {
-        URL.revokeObjectURL(objectUrl);
-        return;
-      }
-
-      const audio = new Audio(objectUrl);
-      // No playbackRate adjustment: speed was applied during synthesis.
-      currentAudioRef.current = audio;
-
-      audio.onended = () => {
-        URL.revokeObjectURL(objectUrl);
-        playQueueIndex(index + 1);
-      };
-
-      audio.onerror = (e) => {
-        console.error("Audio playback error for sentence:", queue[index].text, e);
-        URL.revokeObjectURL(objectUrl);
-        playQueueIndex(index + 1);
-      };
-
-      audio.play().catch(err => {
-        console.error("Failed to start audio playback:", err);
-        URL.revokeObjectURL(objectUrl);
-        playQueueIndex(index + 1);
-      });
-    };
-
-    playQueueIndex(0);
-  };
 
   // Toggle STT recording
   const handleToggleRecording = () => {
@@ -1029,306 +878,52 @@ export default function ChatPage() {
     <div className="flex flex-col lg:flex-row h-[100dvh] w-full overflow-hidden text-[var(--text)] bg-[var(--bg)] p-2 sm:p-4 gap-2 sm:gap-4">
       
       {/* ──────────────────────────────────────────────────
-          1. SIDEBAR (Left panel)
+          1. SESSION RAIL (Left panel)
           ────────────────────────────────────────────────── */}
-      <div
-        className={`${mobilePanel === "sessions" ? "flex" : "hidden"} lg:flex
-          absolute lg:relative inset-2 lg:inset-auto z-30 lg:z-auto
-          w-auto lg:w-80 lg:flex-shrink-0
-          bg-[var(--surface)] border border-[var(--border)] rounded-2xl shadow-lg lg:shadow-sm
-          flex-col overflow-hidden`}
-      >
-        
-        {/* Header / Logo */}
-        <div className="p-5 border-b border-[var(--border)] flex items-center gap-3">
-          <BookOpen className="text-[var(--brand)] w-5 h-5 flex-shrink-0" />
-          <div className="min-w-0 flex-1">
-            <h1 className="font-semibold text-[14px] text-[var(--text)]">Andrew Ng</h1>
-            <p className="text-[11px] text-[var(--text-muted)] font-normal tracking-[0.07em]">
-              Unofficial AI recreation, for learning
-            </p>
-          </div>
-          <button
-            onClick={() => setMobilePanel("chat")}
-            className="lg:hidden p-1.5 rounded-lg border border-[var(--border)] text-[var(--text-muted)] hover:bg-[var(--bg)]"
-            aria-label="Close conversations"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* Primary action first. The old order put a developer API key field
-            and a destructive reset above the button that starts a
-            conversation, which is the build order of the backend rather than
-            the priority of the person using it. */}
-        <div className="p-4">
-          <button
-            onClick={handleNewChat}
-            className="w-full bg-[var(--brand)] hover:bg-[var(--brand-hover)] text-[var(--brand-text)] font-medium text-[13px] py-2.5 rounded-lg flex items-center justify-center gap-2 transition shadow-sm"
-          >
-            <Plus className="w-4 h-4" />
-            New conversation
-          </button>
-        </div>
-
-        {/* Settings, collapsed by default. Touched once (the key) or rarely
-            (speech rate, reset), so they do not deserve permanent space. */}
-        <div className="px-4 pb-2">
-          <button
-            onClick={() => setSettingsOpen((v) => !v)}
-            aria-expanded={settingsOpen}
-            aria-controls="settings-panel"
-            className="w-full flex items-center justify-between text-[12px] text-[var(--text-muted)] hover:text-[var(--text)] py-1.5 transition"
-          >
-            <span className="flex items-center gap-1.5">
-              <Sliders className="w-3.5 h-3.5" />
-              Settings
-            </span>
-            <span className="flex items-center gap-1.5">
-              {!geminiKey.trim() && (
-                <span className="text-[10px] px-1.5 py-0.5 rounded-full border"
-                      style={{ background: "var(--warn-soft)", borderColor: "var(--warn-border)", color: "var(--warn)" }}>
-                  key needed
-                </span>
-              )}
-              <ChevronDown className={`w-3.5 h-3.5 transition-transform ${settingsOpen ? "rotate-180" : ""}`} />
-            </span>
-          </button>
-        </div>
-
-        {settingsOpen && (
-          <div id="settings-panel" className="px-4 pb-4 flex flex-col gap-4 border-b border-[var(--border)]">
-            <div className="flex flex-col gap-2">
-              <label htmlFor="gemini-key" className="text-[11px] font-medium text-[var(--text-muted)] flex items-center gap-1.5">
-                <Key className="w-3.5 h-3.5 text-[var(--brand)]" />
-                Your Gemini API key
-              </label>
-              <input
-                id="gemini-key"
-                type="password"
-                placeholder="Paste your key"
-                value={geminiKey}
-                onChange={(e) => handleSaveKey(e.target.value)}
-                aria-describedby="gemini-key-help"
-                className="w-full bg-[var(--surface)] border text-[13px] px-3 py-2 rounded-lg text-[var(--text)] placeholder-[var(--text-subtle)] focus:outline-none focus:border-[var(--brand)] transition"
-                style={{ borderColor: geminiKey.trim() ? "var(--ok)" : "var(--border)" }}
-              />
-              {/* The field previously gave no feedback at all: nothing told the
-                  user whether a key was saved, and an invalid one surfaced
-                  minutes later as a generic 502. */}
-              <p id="gemini-key-help" className="text-[11px] text-[var(--text-muted)] leading-snug">
-                {geminiKey.trim()
-                  ? "Saved for this browser tab only. Never sent to our server."
-                  : "Get one free at aistudio.google.com. It stays in this browser."}
-              </p>
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <label htmlFor="speech-rate" className="text-[11px] text-[var(--text-muted)] font-medium flex justify-between">
-                <span>Speaking speed</span>
-                <span className="text-[var(--brand)]">{ttsSpeed.toFixed(2)}x</span>
-              </label>
-              <input
-                id="speech-rate"
-                type="range"
-                min="0.8"
-                max="1.5"
-                step="0.05"
-                value={ttsSpeed}
-                onChange={(e) => setTtsSpeed(parseFloat(e.target.value))}
-                className="w-full h-1 bg-[var(--border)] rounded-lg appearance-none cursor-pointer accent-[var(--brand)]"
-              />
-            </div>
-
-            <button
-              onClick={handleResetMemory}
-              className="w-full border text-[13px] py-2 rounded-lg flex items-center justify-center gap-2 transition"
-              style={{ borderColor: "var(--danger-border)", color: "var(--danger)" }}
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              Forget everything about me
-            </button>
-          </div>
-        )}
-
-        {/* Session List */}
-        <div className="flex-1 overflow-y-auto px-3 py-2 flex flex-col gap-1.5">
-          {sessions.map((session) => {
-            const isActive = session.id === activeSessionId;
-            return (
-              <div
-                key={session.id}
-                onClick={() => {
-                  setActiveSessionId(session.id);
-                  localStorage.setItem(KEY_LOCAL_STORAGE_ACTIVE, session.id);
-                  setMobilePanel("chat");
-                  stopSpeaking();
-                  // Transcripts load lazily, so fetch on first open.
-                  if (session.messages.length === 0) {
-                    void loadSessionMessages(session.id);
-                  }
-                }}
-                className={`group px-3 py-2.5 rounded-lg cursor-pointer flex items-center justify-between transition ${
-                  isActive ? "bg-[var(--brand-soft)] border border-[var(--border)] text-[var(--brand)]" : "hover:bg-[var(--bg)] text-[var(--text-muted)] hover:text-[var(--text)]"
-                }`}
-              >
-                <span className="text-[13px] font-normal truncate max-w-[160px]">{session.title}</span>
-                <button
-                  onClick={(e) => handleDeleteChat(session.id, e)}
-                  aria-label={`Delete conversation: ${session.title}`}
-                  className="opacity-0 group-hover:opacity-100 p-1 text-[var(--text-muted)] hover:text-red-500 transition"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      </div>
+      <SessionRail
+        sessions={sessions}
+        activeSessionId={activeSessionId}
+        geminiKey={geminiKey}
+        ttsSpeed={ttsSpeed}
+        settingsOpen={settingsOpen}
+        mobileVisible={mobilePanel === "sessions"}
+        onCloseMobile={() => setMobilePanel("chat")}
+        onNewChat={handleNewChat}
+        onToggleSettings={() => setSettingsOpen((v) => !v)}
+        onSaveKey={handleSaveKey}
+        onSetTtsSpeed={setTtsSpeed}
+        onResetMemory={handleResetMemory}
+        onSelectSession={(id) => {
+          setActiveSessionId(id);
+          localStorage.setItem(KEY_LOCAL_STORAGE_ACTIVE, id);
+          setMobilePanel("chat");
+          stopSpeaking();
+          const s = sessions.find((x) => x.id === id);
+          if (s && s.messages.length === 0) void loadSessionMessages(id);
+        }}
+        onDeleteChat={handleDeleteChat}
+      />
 
       {/* ──────────────────────────────────────────────────
           2. CENTRAL PANEL (Chat bubbles window)
           ────────────────────────────────────────────────── */}
       <div className="flex-1 min-w-0 bg-[var(--surface)] border border-[var(--border)] rounded-2xl shadow-sm flex flex-col overflow-hidden">
         
-        {/* Top bar with Online status */}
-        <div className="h-16 border-b border-[var(--border)] px-3 sm:px-6 flex items-center justify-between bg-[var(--surface)]">
-          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-            {/* Drawer toggle, mobile only */}
-            <button
-              onClick={() => setMobilePanel("sessions")}
-              className="lg:hidden p-2 -ml-1 rounded-lg border border-[var(--border)] text-[var(--text-muted)] hover:bg-[var(--bg)]"
-              aria-label="Show conversations"
-            >
-              <Menu className="w-4 h-4" />
-            </button>
-            <div className="w-8 h-8 rounded-full bg-[var(--brand)] text-[var(--brand-text)] flex items-center justify-center font-semibold text-[14px] flex-shrink-0">AN</div>
-            <div className="min-w-0">
-              <h2 className="text-[14px] font-medium text-[var(--text)] truncate">Andrew Ng</h2>
-              <span className="text-[11px] text-green-600 font-normal flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-green-600 animate-pulse" />
-                <span className="truncate">Grounded twin</span>
-              </span>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 sm:gap-3">
-            {/* Graph drawer toggle, mobile only */}
-            <button
-              onClick={() => setMobilePanel("graph")}
-              className="lg:hidden p-2 rounded-lg border border-[var(--border)] text-[var(--text-muted)] hover:bg-[var(--bg)]"
-              aria-label="Show memory graph"
-            >
-              <Cpu className="w-4 h-4" />
-            </button>
-            {/* Theme toggle. Students working at night are a core audience. */}
-            <button
-              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-              aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-              title={theme === "dark" ? "Light theme" : "Dark theme"}
-              className="p-2 rounded-lg border border-[var(--border)] text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--surface-hover)] transition"
-            >
-              {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-            </button>
-
-            {/* Read aloud toggle */}
-            <button
-              onClick={() => {
-                setReadAloudEnabled(!readAloudEnabled);
-                stopSpeaking();
-              }}
-              className={`p-2 rounded-lg border transition ${
-                readAloudEnabled
-                  ? "bg-[var(--brand-soft)] border-[var(--border-strong)] text-[var(--brand)]"
-                  : "border-[var(--border)] text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--bg)]"
-              }`}
-              title="Toggle read aloud" aria-label="Toggle read aloud" aria-pressed={readAloudEnabled}
-            >
-              <Volume2 className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
+        <ConversationHeader
+          onOpenSessions={() => setMobilePanel("sessions")}
+          onOpenGraph={() => setMobilePanel("graph")}
+          readAloudEnabled={readAloudEnabled}
+          onToggleReadAloud={() => {
+            setReadAloudEnabled(!readAloudEnabled);
+            stopSpeaking();
+          }}
+        />
 
         {/* Dialogue history scroll bubble */}
         <div className="flex-1 overflow-y-auto p-3 sm:p-6 flex flex-col gap-4 sm:gap-6" role="log" aria-label="Conversation">
-          {activeSession?.messages.map((msg, index) => {
-            const isUser = msg.role === "user";
-            return (
-              <div
-                key={index}
-                className={`flex gap-2 sm:gap-4 max-w-full sm:max-w-3xl min-w-0 ${isUser ? "ml-auto flex-row-reverse" : ""}`}
-              >
-                {/* Avatar */}
-                <div
-                  className={`w-8 h-8 rounded-full flex items-center justify-center font-medium text-[13px] flex-shrink-0 ${
-                    isUser ? "bg-[var(--text-muted)] text-[var(--brand-text)]" : "bg-[var(--brand)] text-[var(--brand-text)]"
-                  }`}
-                >
-                  {isUser ? <User className="w-4 h-4" /> : "AN"}
-                </div>
-                
-                {/* Message Box */}
-                <div className={`flex flex-col gap-3 p-3 sm:p-4 rounded-2xl text-[13px] leading-relaxed border min-w-0 break-words ${
-                  isUser ? "border-[var(--border)] bg-[var(--bg)] text-[var(--text)]" : "border-[var(--border)] bg-[var(--surface)] text-[var(--text)] shadow-sm"
-                }`}>
-                  <div className="w-full min-w-0"><MessageContent content={msg.content} /></div>
-
-                  {/* Ambient memory. Shown above the answer because it is
-                      context for what follows, not a footnote about it. */}
-                  {!isUser && msg.recalled && msg.recalled.length > 0 && (
-                    <div className="flex items-start gap-1.5 text-[12px] text-[var(--text-muted)] -mt-1">
-                      <Sparkles className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-[var(--brand)]" />
-                      <span>
-                        Building on what we covered before: {msg.recalled.join(", ")}
-                      </span>
-                    </div>
-                  )}
-
-                  {/* Grounding notice — shown when the corpus did not really
-                      cover the question, so the answer is general expertise
-                      rather than something Andrew wrote about. */}
-                  {!isUser && msg.isGrounded === false && (
-                    <div className="flex items-start gap-1.5 text-[11px] px-2.5 py-1.5 rounded-lg mt-1 border" style={{ color: "var(--warn)", background: "var(--warn-soft)", borderColor: "var(--warn-border)" }}>
-                      <span>
-                        Outside Andrew&apos;s written material. This answer is his general
-                        perspective rather than a grounded citation.
-                      </span>
-                    </div>
-                  )}
-
-                  {/* Citation Badges */}
-                  {!isUser && msg.retrievedChunks && msg.retrievedChunks.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 mt-2 border-t border-[var(--border)] pt-2">
-                      <span className="text-[11px] text-[var(--text-muted)] font-medium block w-full">
-                        {msg.isGrounded === false ? "Closest material:" : "From Andrew's materials:"}
-                      </span>
-                      {msg.retrievedChunks.slice(0, 3).map((chunk, cIdx) => (
-                        <span
-                          key={cIdx}
-                          title={chunk.chunk_text ? `${chunk.chunk_text.slice(0, 300)}…` : `Score: ${chunk.final_score.toFixed(4)}`}
-                          className="text-[11px] text-[var(--brand)] hover:text-[var(--brand)]/80 bg-[var(--brand-soft)] px-2 py-1 rounded-lg border border-[var(--border)] max-w-[180px] truncate cursor-help flex items-center gap-1"
-                        >
-                          <BookOpen className="w-3 h-3 text-[var(--brand)] flex-shrink-0" />
-                          {chunk.source_file.replace(/_/g, " ").replace(".txt", "")}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Cache telemetry — real cached-token count from Gemini
-                      usage metadata, not an inference from object age. */}
-                  {!isUser && (msg.cachedTokenCount ?? 0) > 0 && (
-                    <div className="flex items-center gap-1.5 text-[11px] font-normal mt-1">
-                      <span className="flex items-center gap-0.5 px-2 py-0.5 rounded-full border" style={{ color: "var(--ok)", background: "var(--ok-soft)", borderColor: "var(--border)" }}>
-                        <Zap className="w-3 h-3" style={{ fill: "var(--ok)", color: "var(--ok)" }} />
-                        {msg.cachedTokenCount?.toLocaleString()} tokens served from cache
-                      </span>
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
+          {activeSession?.messages.map((msg, index) => (
+            <MessageBubble key={index} msg={msg} />
+          ))}
           {/* Waiting state, only until the first token lands. Once the stream
               starts the partial answer is itself the indicator, which is why
               a static "Thinking..." for a 5 to 20 second wait read as a hang. */}
@@ -1391,199 +986,58 @@ export default function ChatPage() {
           <div ref={chatBottomRef} />
         </div>
 
-        {/* Input box */}
-        <div className="p-3 sm:p-6 border-t border-[var(--border)] flex flex-col gap-3">
-          
-
-
-          <form onSubmit={handleSendMessage} className="flex gap-3">
-            <div className="flex-1 relative">
-              <input
-                type="text"
-                value={userInput}
-                onChange={(e) => setUserInput(e.target.value)}
-                placeholder={isRecording ? "Listening..." : "Ask Andrew a question about ML models..."}
-                disabled={isLoading}
-                className="w-full bg-[var(--surface)] border border-[var(--border)] text-[13px] px-4 py-3.5 pr-20 rounded-xl focus:outline-none focus:border-[var(--brand)] focus:ring-1 focus:ring-[var(--brand)] text-[var(--text)] placeholder-[var(--text-subtle)] transition"
-              />
-              <button
-                type="button"
-                onClick={() => {
-                  setVoiceState("listening");
-                }}
-                className="absolute right-10 top-3.5 text-[var(--text-muted)] hover:text-[var(--brand)] transition"
-                title="Start voice dialogue mode" aria-label="Start hands-free voice conversation"
-              >
-                <Headphones className="w-4 h-4" />
-              </button>
-              <button
-                type="button"
-                onClick={handleToggleRecording}
-                disabled={isLoading}
-                className={`absolute right-3 top-3.5 transition ${
-                  isRecording ? "text-red-500 hover:text-red-700" : "text-[var(--text-muted)] hover:text-[var(--brand)]"
-                }`}
-                title={isRecording ? "Stop recording" : "Record voice input"}
-                aria-label={isRecording ? "Stop recording" : "Record voice input"}
-                aria-pressed={isRecording}
-              >
-                {isRecording ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-              </button>
-            </div>
-            
-            <button
-              type="submit"
-              disabled={isLoading}
-              aria-label="Send message"
-              className="bg-[var(--brand)] hover:bg-[var(--brand)]/90 disabled:opacity-50 text-[var(--brand-text)] p-3.5 rounded-xl flex items-center justify-center transition shadow-sm"
-            >
-              <Send className="w-4 h-4" />
-            </button>
-          </form>
-        </div>
+        <Composer
+          value={userInput}
+          isRecording={isRecording}
+          isLoading={isLoading}
+          onChange={setUserInput}
+          onSubmit={handleSendMessage}
+          onToggleRecording={handleToggleRecording}
+          onStartVoice={() => setVoiceState("listening")}
+        />
       </div>
 
       {/* ──────────────────────────────────────────────────
-          3. GRAPH MEMORY MATRIX (Right panel)
+          3. CONTEXT GRAPH (Right panel)
           ────────────────────────────────────────────────── */}
-      <div
-        className={`${mobilePanel === "graph" ? "flex" : "hidden"} lg:flex
-          absolute lg:relative inset-2 lg:inset-auto z-30 lg:z-auto
-          w-auto lg:w-[420px] xl:w-[480px] lg:flex-shrink-0
-          bg-[var(--surface)] border border-[var(--border)] rounded-2xl shadow-lg lg:shadow-sm
-          flex-col overflow-hidden`}
-      >
-        
-        {/* Header with Sync buttons & View Toggle */}
-        <div className="p-4 border-b border-[var(--border)] flex items-center justify-between bg-[var(--surface)]">
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setMobilePanel("chat")}
-              className="lg:hidden p-1.5 -ml-1 rounded-lg border border-[var(--border)] text-[var(--text-muted)] hover:bg-[var(--bg)]"
-              aria-label="Close memory graph"
-            >
-              <X className="w-4 h-4" />
-            </button>
-            <Cpu className="text-[var(--brand)] w-4 h-4" />
-            <h2 className="text-[14px] font-medium text-[var(--text)]">What I know about you</h2>
-          </div>
-          
-          {/* Segment control toggle & Sync button */}
-          <div className="flex items-center gap-3">
-            <SlidingTabs
-              size="sm"
-              aria-label="Knowledge graph scope"
-              value={graphView}
-              onValueChange={setGraphView}
-              options={[
-                { value: "session", label: "Active Chat" },
-                { value: "global", label: "Global Map" },
-              ]}
-            />
-
-            <button
-              onClick={() => handleSyncGraph(graphView)}
-              disabled={isSyncingGraph}
-              className="p-1.5 rounded-lg border border-[var(--border)] hover:bg-[var(--bg)] text-[var(--text-muted)] transition"
-              title="Refresh knowledge graph" aria-label="Refresh what I know about you"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isSyncingGraph ? "animate-spin" : ""}`} />
-            </button>
-          </div>
-        </div>
-
-        {/* Network visualizer graph */}
-        <div className="flex-1 relative h-full w-full">
-          <KnowledgeGraphView
-            triplets={activeSession?.triplets || []}
-            edges={activeSession?.edges || []}
-            isLoading={isSyncingGraph}
-            width="100%"
-            height="100%"
-            onExploreNode={(concept) => {
-              setUserInput(`Explain the concept of ${concept} and its connections in detail.`);
-              submitDialogueMessage(`Explain the concept of ${concept} and its connections in detail.`);
-            }}
-          />
-        </div>
-      </div>
+      <ContextGraphPanel
+        mobileVisible={mobilePanel === "graph"}
+        onCloseMobile={() => setMobilePanel("chat")}
+        graphView={graphView}
+        onGraphViewChange={setGraphView}
+        isSyncingGraph={isSyncingGraph}
+        onSync={handleSyncGraph}
+        triplets={activeSession?.triplets || []}
+        edges={activeSession?.edges || []}
+        onExploreNode={(concept) => {
+          setUserInput(`Explain the concept of ${concept} and its connections in detail.`);
+          submitDialogueMessage(`Explain the concept of ${concept} and its connections in detail.`);
+        }}
+      />
 
       {/* ──────────────────────────────────────────────────
-          4. INTERACTIVE VOICE OVERLAY (Glass modal)
+          4. VOICE OVERLAY (Glass modal)
           ────────────────────────────────────────────────── */}
       {voiceState !== "inactive" && (
-        <div role="dialog" aria-modal="true" aria-label="Voice conversation" className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm transition-all duration-300">
-          
-          <div className="relative max-w-[400px] w-full bg-[var(--surface)] rounded-2xl border border-[var(--border)] shadow-2xl p-10 flex flex-col items-center">
-            
-            {/* Sleek Ghost Close Button inside card top-right */}
-            <button
-              ref={voiceCloseRef}
-              onClick={() => {
-                stopSpeaking();
-                setVoiceState("inactive");
-              }}
-              className="absolute top-4 right-4 w-7 h-7 flex items-center justify-center rounded-full border border-[var(--border)] hover:bg-[var(--surface-hover)] text-[var(--text-muted)] hover:text-[var(--text)] transition cursor-pointer"
-              title="Exit voice mode" aria-label="Exit voice mode"
-            >
-              <X className="w-4 h-4" />
-            </button>
-
-            {/* Audio Waveform Visualization: 9 dynamic vertical bars */}
-            <div className={`waveform-container ${
-              voiceState === "listening" ? "waveform-listening" :
-              voiceState === "thinking" ? "waveform-thinking" :
-              "waveform-speaking"
-            } mb-8`}>
-              <div className="waveform-bar bar-1" />
-              <div className="waveform-bar bar-2" />
-              <div className="waveform-bar bar-3" />
-              <div className="waveform-bar bar-4" />
-              <div className="waveform-bar bar-5" />
-              <div className="waveform-bar bar-6" />
-              <div className="waveform-bar bar-7" />
-              <div className="waveform-bar bar-8" />
-              <div className="waveform-bar bar-9" />
-            </div>
-
-            {/* Central control button */}
-            <button
-              onClick={() => {
-                if (voiceState === "speaking") {
-                  stopSpeaking();
-                  setVoiceState("listening");
-                } else if (voiceState === "listening") {
-                  setVoiceState("inactive");
-                }
-              }}
-              className="px-6 py-2.5 bg-[var(--brand)] hover:bg-[var(--brand)]/90 text-[var(--brand-text)] rounded-full text-[13px] font-medium mb-6 transition"
-            >
-              {voiceState === "listening" ? "Stop listening" : "Tap to interrupt"}
-            </button>
-
-            {/* Voice Status Text */}
-            <p className="text-[13px] text-[var(--text-muted)] font-normal mb-6 text-center capitalize">
-              {voiceState}...
-            </p>
-
-            {/* Speed controller inside voice modal */}
-            <div className="flex items-center gap-3 bg-[var(--bg)] border border-[var(--border)] px-3 py-1.5 rounded-full">
-              <button
-                onClick={() => setTtsSpeed(prev => Math.max(0.8, prev - 0.1))}
-                className="text-xs text-[var(--text-muted)] hover:text-[var(--text)] px-1 font-bold cursor-pointer"
-              >
-                -
-              </button>
-              <span className="text-[12px] text-[var(--brand)] font-medium min-w-[32px] text-center">{ttsSpeed.toFixed(1)}x</span>
-              <button
-                onClick={() => setTtsSpeed(prev => Math.min(1.5, prev + 0.1))}
-                className="text-xs text-[var(--text-muted)] hover:text-[var(--text)] px-1 font-bold cursor-pointer"
-              >
-                +
-              </button>
-            </div>
-          </div>
-        </div>
+        <VoiceOverlay
+          voiceState={voiceState}
+          ttsSpeed={ttsSpeed}
+          closeRef={voiceCloseRef}
+          onExit={() => {
+            stopSpeaking();
+            setVoiceState("inactive");
+          }}
+          onCenterAction={() => {
+            if (voiceState === "speaking") {
+              stopSpeaking();
+              setVoiceState("listening");
+            } else if (voiceState === "listening") {
+              setVoiceState("inactive");
+            }
+          }}
+          onSpeedDown={() => setTtsSpeed((prev) => Math.max(0.8, prev - 0.1))}
+          onSpeedUp={() => setTtsSpeed((prev) => Math.min(1.5, prev + 0.1))}
+        />
       )}
     </div>
   );
