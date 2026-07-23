@@ -15,7 +15,7 @@ const PORTRAIT_SRC = "/andrew-portrait.png"
 export const metadata = {
   title: "Andrew Ng Digital Twin",
   description:
-    "Converse with a grounded, unofficial AI recreation of Andrew Ng's public knowledge, reasoning, and voice — with contextual memory across sessions.",
+    "Converse with a grounded, unofficial AI recreation of Andrew Ng's public knowledge, reasoning, and voice, with contextual memory across sessions.",
 }
 
 /**
@@ -127,16 +127,16 @@ export default function LandingPage() {
       {/* ─── Adaptive conversation ────────────────────────────────────── */}
       <section className="border-t border-[var(--border)]">
         <div className="mx-auto w-[min(1100px,calc(100%-2rem))] py-20 sm:py-28">
-          <div className="max-w-[46ch]">
+          <div className="mx-auto max-w-[54ch] text-center">
             <h2 className="text-3xl font-semibold tracking-[-0.02em] sm:text-4xl">
               One presence, calibrated to whoever is asking
             </h2>
-            <p className="mt-5 text-base leading-relaxed text-[var(--text-muted)]">
+            <p className="mt-5 text-[17px] leading-relaxed text-[var(--text-muted)]">
               The accuracy never changes. The depth, the notation, and the entry
-              point do — the way a good mentor reads the room.
+              point do, the way a good mentor reads the room.
             </p>
           </div>
-          <div className="mt-10">
+          <div className="mx-auto mt-10 max-w-3xl">
             <AdaptiveConversation />
           </div>
         </div>
@@ -152,8 +152,8 @@ export default function LandingPage() {
               </h2>
               <p className="mt-5 text-base leading-relaxed text-[var(--text-muted)]">
                 A question runs against his public work through hybrid semantic
-                and keyword retrieval. The answer is written from what came back
-                — and you can open the exact passages behind it.
+                and keyword retrieval. The answer is written from what came back,
+                and you can open the exact passages behind it.
               </p>
               <p className="mt-4 text-[13px] text-[var(--text-subtle)]">
                 When the material does not cover a question, the twin says so
@@ -172,11 +172,12 @@ export default function LandingPage() {
                 <span className="h-px flex-1 bg-gradient-to-l from-transparent via-[var(--brand)] to-[var(--brand)] opacity-60" />
               </div>
               <p className="text-[15px] leading-relaxed text-[var(--text-muted)]">
-                “So instead of endlessly tweaking the model, you systematically
-                improve the data — the labels, the coverage, the edge cases…”
+                &ldquo;So instead of endlessly tweaking the model, you
+                systematically improve the data: the labels, the coverage, the
+                edge cases.&rdquo;
               </p>
               <div className="mt-5 flex flex-wrap gap-2">
-                {["The Batch — Issue 84", "MLOps lecture, CS229", "A Chat with Andrew"].map(
+                {["The Batch, Issue 84", "MLOps lecture, CS229", "A Chat with Andrew"].map(
                   (c) => (
                     <span
                       key={c}
@@ -196,19 +197,19 @@ export default function LandingPage() {
       {/* ─── Continuity ───────────────────────────────────────────────── */}
       <section className="border-t border-[var(--border)]">
         <div className="mx-auto w-[min(1100px,calc(100%-2rem))] py-20 sm:py-28">
-          <div className="max-w-[46ch]">
+          <div className="mx-auto max-w-[56ch] text-center">
             <h2 className="text-3xl font-semibold tracking-[-0.02em] sm:text-4xl">
               It remembers where you left off
             </h2>
-            <p className="mt-5 text-base leading-relaxed text-[var(--text-muted)]">
-              A contextual-memory graph records what you share — your role, your
-              projects, what you are building — and carries it forward. It is
-              time-aware: revise something and the old version is retired, not
+            <p className="mt-5 text-[17px] leading-relaxed text-[var(--text-muted)]">
+              A contextual-memory graph records what you share (your role, your
+              projects, what you are building) and carries it forward. It is
+              time aware: revise something and the old version is retired, not
               left to contradict the new one.
             </p>
           </div>
 
-          <div className="mt-10 grid gap-4 sm:grid-cols-[1fr_auto_1fr] sm:items-center">
+          <div className="mx-auto mt-12 grid max-w-4xl gap-4 sm:grid-cols-[1fr_auto_1fr] sm:items-center">
             <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5">
               <div className="text-[11px] uppercase tracking-wider text-[var(--text-subtle)]">
                 Last week
@@ -225,8 +226,8 @@ export default function LandingPage() {
                 Today
               </div>
               <p className="mt-2 text-[14px] text-[var(--text-muted)]">
-                “Building on the inspection system you mentioned — here&apos;s how
-                I&apos;d stage the data collection…”
+                &ldquo;Building on the inspection system you mentioned, here is
+                how I&apos;d stage the data collection.&rdquo;
               </p>
             </div>
           </div>
@@ -249,8 +250,9 @@ export default function LandingPage() {
                 Answers can be read aloud in a synthetic voice modelled on
                 Andrew&apos;s, streamed sentence by sentence with visible
                 listening, thinking, and speaking states. It carries a
-                persistent “synthetic voice” label and an audio provenance
-                watermark — it is never presented as a real recording.
+                persistent &ldquo;synthetic voice&rdquo; label and an audio
+                provenance watermark, and it is never presented as a real
+                recording.
               </p>
             </div>
             <div className="order-1 flex justify-center lg:order-2">
@@ -267,6 +269,16 @@ export default function LandingPage() {
       {/* ─── Pillars ──────────────────────────────────────────────────── */}
       <section className="border-t border-[var(--border)]">
         <div className="mx-auto w-[min(1100px,calc(100%-2rem))] py-20 sm:py-28">
+          <div className="mx-auto mb-10 max-w-[48ch] text-center">
+            <h2 className="text-3xl font-semibold tracking-[-0.02em] sm:text-4xl">
+              Four parts, working as one
+            </h2>
+            <p className="mt-5 text-[17px] leading-relaxed text-[var(--text-muted)]">
+              Each does a job the others rely on. Together they make the twin
+              feel like a person you can return to, not a fresh chatbot every
+              time.
+            </p>
+          </div>
           <div className="grid gap-px overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--border)] sm:grid-cols-2 [&>*]:bg-[var(--surface)] [&>*]:p-7">
             {[
               {
