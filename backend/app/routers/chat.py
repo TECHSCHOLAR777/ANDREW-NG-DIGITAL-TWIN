@@ -144,10 +144,10 @@ class ChatRequest(BaseModel):
     query_embedding:  list[float] | None = Field(
         default=None,
         description=(
-            "Optional pre-computed 768-dim embedding from all-mpnet-base-v2. "
-            "If omitted the server computes it locally (no API call). Ignored "
-            "when the query is rewritten, since the rewrite changes the text "
-            "that must be embedded."
+            "Optional pre-computed query embedding matching the configured "
+            "provider's dimension (currently 1024-dim, Jina — see migration "
+            "014). If omitted the server computes it. Ignored when the query is "
+            "rewritten, since the rewrite changes the text that must be embedded."
         )
     )
     temperature:      float = Field(default=0.7, ge=0.0, le=1.0)

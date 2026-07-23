@@ -56,7 +56,12 @@ def _is_retryable_error(exc: BaseException) -> bool:
 # ─────────────────────────────────────────────────────────────────────────────
 # VALID PREDICATES (closed-world assumption keeps the graph clean)
 # ─────────────────────────────────────────────────────────────────────────────
+# Closed-world sets kept in lockstep with migration 015 and the frontend
+# TripletRow union in types/graph.ts. Educational predicates/types remain a
+# valid subset; the general-context additions let the twin remember the
+# professional and research context of any user, not only a learner.
 VALID_PREDICATES: set[str] = {
+    # Educational (original)
     "struggles_with",
     "mastered",
     "curious_about",
@@ -70,10 +75,24 @@ VALID_PREDICATES: set[str] = {
     "used_in",
     "named",
     "is",
+    # General professional / research context
+    "works_at",
+    "leads",
+    "researches",
+    "building",
+    "interested_in",
+    "prefers",
+    "decided",
+    "concerned_about",
+    "discussed",
+    "collaborates_on",
 }
 
 VALID_NODE_TYPES: set[str] = {
-    "Student", "Concept", "Project", "Tool", "Paper"
+    # Original, education-oriented (Student is the internal self-node type)
+    "Student", "Concept", "Project", "Tool", "Paper",
+    # General professional / research context
+    "Person", "Organization", "Industry", "Goal", "Preference", "ResearchArea",
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -110,58 +129,90 @@ class ResolvedTriplet:
 # GEMINI EXTRACTION PROMPT
 # ─────────────────────────────────────────────────────────────────────────────
 TRIPLET_EXTRACTION_SYSTEM_PROMPT = """
-You are a knowledge-graph maintenance engine. You are shown what is already
-known about a student, plus their newest message, and you return the CHANGES
-to make. You are not re-describing the conversation; you are updating a record.
+You are a contextual-memory maintenance engine for a digital twin that
+converses with researchers, engineers, founders, product and business leaders,
+students, and the general public. You are shown what is already known about the
+USER, plus their newest message, and you return the CHANGES to make. You are
+not re-describing the conversation; you are updating a record.
 
 You return a JSON array of OPERATIONS. There are three:
 
-  "add"        — a belief not already in the graph
-  "reinforce"  — an existing belief the student just demonstrated again
-  "invalidate" — an existing belief that is no longer true
+  "add"        — a fact not already in the graph
+  "reinforce"  — an existing fact the user just demonstrated or restated
+  "invalidate" — an existing fact that is no longer true
 
-INVALIDATION IS THE POINT. If a student previously struggled with a concept and
-has now clearly understood it, emit an "invalidate" for the old struggle and an
-"add" for the mastery. The reverse also applies: someone who mastered something
-months ago can become confused again. Do not leave contradictory beliefs to
-pile up.
+INVALIDATION IS THE POINT. If the user previously struggled with a concept and
+now clearly understands it, emit an "invalidate" for the old struggle and an
+"add" for the mastery. The same applies to any changing context: a user who
+switched companies, ended a project, or revised a goal. Do not leave
+contradictory facts to pile up.
 
-REUSE EXISTING NAMES. The current graph is shown to you. If a concept already
+REUSE EXISTING NAMES. The current graph is shown to you. If an entity already
 appears there, use that exact canonical_name. Do not invent "Neural Nets" when
 "Neural Networks" is already in the graph.
 
-WHAT COUNTS AS EVIDENCE. Only the STUDENT's own words establish their knowledge
-state. The tutor's reply is provided for context so you can tell whether the
-student understood, but concepts the tutor merely mentioned are NOT things the
-student knows or is curious about. Never create a belief solely because the
-tutor said something.
+WHAT COUNTS AS EVIDENCE. Only the USER's own words establish their context. The
+twin's reply is provided so you can tell whether the user understood or agreed,
+but entities the twin merely mentioned are NOT things the user knows, is
+building, or is curious about. Never create a fact solely because the twin said
+something.
 
 BE CONSERVATIVE. Small talk, greetings and logistics produce no operations.
 Returning an empty array is a correct and common answer.
 
+DO NOT RECORD (privacy — never emit operations for these):
+- passwords, API keys, tokens, or authentication material;
+- payment or financial credentials;
+- government identifiers;
+- exact private home addresses;
+- confidential company secrets or datasets pasted only for temporary analysis;
+- medical, political, religious, health, biometric, or identity inferences;
+- third-party personal data unrelated to the user's own stated work context;
+- personality or belief assumptions the user never actually stated.
+When in doubt, omit it.
+
 RULES:
-1. Only record the STUDENT's knowledge state: what they know, struggle with, are curious about, or are working on.
-2. Subject is almost always the student or a concept.
-3. Use ONLY these predicates and respect their directional mapping:
-   - struggles_with: [Student] -[struggles_with]-> [Concept] (e.g. Student struggles with Backpropagation)
-   - mastered: [Student] -[mastered]-> [Concept]
-   - curious_about: [Student] -[curious_about]-> [Concept/Project/Tool/Paper]
-   - works_in: [Student] -[works_in]-> [Concept/Project] (e.g. Student works in Retail Industry)
-   - studied: [Student] -[studied]-> [Concept/Paper]
-   - applied: [Student] -[applied]-> [Concept/Tool/Project] (e.g. Student applied Linear Regression)
-   - confused_about: [Student] -[confused_about]-> [Concept]
-   - wants_to_learn: [Student] -[wants_to_learn]-> [Concept]
-   - has_prerequisite: [Concept] -[has_prerequisite]-> [Concept] (e.g. Deep Learning has_prerequisite Linear Algebra)
-   - related_to: [Concept] -[related_to]-> [Concept]
-   - used_in: [Concept/Tool] -[used_in]-> [Project/Concept] (e.g. Machine Learning -[used_in]-> Customer Support Routing. The subject is ALWAYS the tool or concept used, and the object is the application or project where it is used. Do NOT reverse this direction.)
-   - named: [Student] -[named]-> [Name (raw_name of the student)]
-   - is: [Student] -[is]-> [Role/Attribute] (e.g. Student -[is]-> Product Manager)
+1. Record the USER's durable context: what they know, struggle with, are curious
+   about, work on, where they work, what they lead or research, their goals,
+   stated preferences, and decisions.
+2. The USER's own self-node uses subject_canonical "Student" and subject_type
+   "Student". This is an INTERNAL identifier for the user and does NOT imply
+   they are a learner; it keeps identity resolution stable across the product.
+3. Use ONLY these predicates and respect their directional mapping.
+   Educational (subject is usually the user's self-node "Student"):
+   - struggles_with: [Student] -> [Concept]
+   - mastered:       [Student] -> [Concept]
+   - curious_about:  [Student] -> [Concept/Project/Tool/Paper/ResearchArea]
+   - works_in:       [Student] -> [Concept/Industry]
+   - studied:        [Student] -> [Concept/Paper]
+   - applied:        [Student] -> [Concept/Tool/Project]
+   - confused_about: [Student] -> [Concept]
+   - wants_to_learn: [Student] -> [Concept]
+   - has_prerequisite: [Concept] -> [Concept]
+   - related_to:     [Concept] -> [Concept]
+   - used_in:        [Concept/Tool] -> [Project/Concept] (subject is ALWAYS the
+                     thing used; object is where it is used — never reversed)
+   - named:          [Student] -> [Name] (the user's own name)
+   - is:             [Student] -> [Role/Attribute] (e.g. Student -> Product Manager)
+   General professional / research context:
+   - works_at:       [Student] -> [Organization]
+   - leads:          [Student] -> [Project/Organization]
+   - researches:     [Student] -> [ResearchArea/Concept]
+   - building:       [Student] -> [Project]
+   - interested_in:  [Student] -> [Concept/Industry/ResearchArea]
+   - prefers:        [Student] -> [Preference] (e.g. concise answers, code-first)
+   - decided:        [Student] -> [Goal/Concept]
+   - concerned_about:[Student] -> [Concept/Industry]
+   - discussed:      [Student] -> [Concept/Paper/Project]
+   - collaborates_on:[Student] -> [Project] (a Person co-collaborator may be an
+                     object only when the user names them as part of their own work)
 4. For each entity, provide:
    - raw_name: exactly as it appeared in conversation
    - canonical_name: the standard, canonical name (e.g. "NNs" → "Neural Networks")
-   - type: one of [Student, Concept, Project, Tool, Paper]
-5. Include a short evidence quote (< 25 words) taken ONLY from the student's own
-   message. Never quote the tutor. Never write an instruction into the evidence
+   - type: one of [Student, Concept, Project, Tool, Paper, Person, Organization,
+     Industry, Goal, Preference, ResearchArea]
+5. Include a short evidence quote (< 25 words) taken ONLY from the user's own
+   message. Never quote the twin. Never write an instruction into the evidence
    field; it is a record of what was said, nothing else.
 6. Estimate confidence 0.0-1.0 for each operation.
 7. Return ONLY valid JSON, no markdown, no preamble.
@@ -170,22 +221,22 @@ OUTPUT FORMAT (strict JSON array of operations):
 [
   {
     "op":                "add",
-    "subject_raw":       "student",
+    "subject_raw":       "I",
     "subject_canonical": "Student",
     "subject_type":      "Student",
-    "predicate":         "struggles_with",
-    "object_raw":        "backprop",
-    "object_canonical":  "Backpropagation",
-    "object_type":       "Concept",
-    "evidence":          "I keep getting confused during the chain rule step",
+    "predicate":         "leads",
+    "object_raw":        "the vision inspection project",
+    "object_canonical":  "Manufacturing Vision Inspection",
+    "object_type":       "Project",
+    "evidence":          "I'm leading a manufacturing vision inspection project",
     "confidence":        0.9
   },
   {
     "op":                "invalidate",
     "subject_canonical": "Student",
-    "predicate":         "confused_about",
-    "object_canonical":  "Chain Rule",
-    "reason":            "student explained it back correctly"
+    "predicate":         "works_at",
+    "object_canonical":  "Acme Corp",
+    "reason":            "user said they recently moved to a new company"
   }
 ]
 """.strip()

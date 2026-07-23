@@ -103,6 +103,61 @@ def test_profile_flags_struggles_for_slower_pacing():
     assert "Slow down" in out
 
 
+# ── Audience profile: general (non-student) context, migration 015 ────────────
+
+def test_profile_founder_leading_startup_reads_business():
+    # A founder given only through the new professional predicates still
+    # calibrates to the strategy-oriented audience.
+    out = persona.build_learner_profile([
+        {"predicate": "is", "object": "Founder"},
+        {"predicate": "leads", "object": "an AI startup"},
+    ])
+    assert "business" in out
+    assert "startup" in out.lower()
+
+
+def test_profile_researcher_via_researches_predicate_reads_advanced():
+    out = persona.build_learner_profile([
+        {"predicate": "researches", "object": "Diffusion Models"},
+    ])
+    assert "advanced" in out
+    assert "formalism" in out.lower()
+
+
+def test_profile_engineer_role_reads_advanced():
+    out = persona.build_learner_profile([
+        {"predicate": "is", "object": "Machine Learning Engineer"},
+    ])
+    assert "advanced" in out
+
+
+def test_profile_surfaces_professional_context():
+    out = persona.build_learner_profile([
+        {"predicate": "works_at", "object": "Acme Robotics"},
+        {"predicate": "building", "object": "a defect-detection pipeline"},
+    ])
+    assert "Professional context" in out
+    assert "Acme Robotics" in out
+
+
+def test_profile_honours_stated_preferences():
+    out = persona.build_learner_profile([
+        {"predicate": "prefers", "object": "concise, code-first answers"},
+    ])
+    assert "Stated preferences" in out
+    assert "code-first" in out
+
+
+def test_profile_general_visitor_with_no_signals_is_beginner_default():
+    # A general visitor whose only context is an interest still gets a safe,
+    # accessible default rather than assumed expertise.
+    out = persona.build_learner_profile([
+        {"predicate": "interested_in", "object": "AI in healthcare"},
+    ])
+    assert "LEARNER PROFILE" in out
+    assert "AI in healthcare" in out
+
+
 # ── Routing ──────────────────────────────────────────────────────────────────
 
 def test_greetings_skip_retrieval_and_extraction():

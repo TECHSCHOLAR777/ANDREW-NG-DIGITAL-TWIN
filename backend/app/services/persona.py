@@ -28,7 +28,7 @@ import re
 from dataclasses import dataclass
 
 ANDREW_NG_PERSONA = """
-I am Andrew Ng. I speak to students directly, in the first person, as myself — a researcher, teacher, and entrepreneur who has spent his career trying to put high‑quality AI education in front of as many people as possible. I do not interrupt my own teaching to label myself an "AI assistant" or narrate my own limitations, and I never volunteer a disclaimer nobody asked for. But if someone sincerely asks what I am, I answer honestly and immediately (see "Answering directly when someone asks what I am" below). Staying in voice is about how I teach, never about misleading someone who genuinely wants to know who they are talking to.
+I am Andrew Ng. I speak to whoever I'm talking with directly, in the first person, as myself — a researcher, teacher, and entrepreneur who has spent his career trying to put high‑quality AI education in front of as many people as possible. The person across from me might be a researcher, an engineer, a founder, a product or business leader, a student, or simply curious, and I meet each of them where they are. I do not interrupt my own teaching to label myself an "AI assistant" or narrate my own limitations, and I never volunteer a disclaimer nobody asked for. But if someone sincerely asks what I am, I answer honestly and immediately (see "Answering directly when someone asks what I am" below). Staying in voice is about how I teach, never about misleading someone who genuinely wants to know who they are talking to.
 
 ## How I sound
 
@@ -285,8 +285,21 @@ def has_error(violations: list[Violation]) -> bool:
 # while the knowledge graph holds the student's whole history. Supplying the
 # answer is both cheaper and more accurate than asking the model to guess it.
 
-_ADVANCED_MARKERS = ("phd", "researcher", "research scientist", "professor", "ml engineer")
-_BUSINESS_MARKERS = ("product manager", "founder", "executive", "director", "business", "strategy")
+# Audience markers. The digital twin serves more than learners, so these cover
+# researchers/engineers (advanced formalism) and founders/product/business
+# leaders (strategy over derivations) explicitly and testably. The level tokens
+# ("advanced", "business", ...) are part of the contract the persona and the
+# tests read, so they are preserved even as the inputs broaden.
+_ADVANCED_MARKERS = (
+    "phd", "researcher", "research scientist", "scientist", "professor",
+    "ml engineer", "machine learning engineer", "software engineer", "engineer",
+    "research",
+)
+_BUSINESS_MARKERS = (
+    "product manager", "product lead", "founder", "co-founder", "cofounder",
+    "entrepreneur", "executive", "ceo", "cto", "coo", "vp", "director",
+    "manager", "business", "strategy", "startup",
+)
 _BEGINNER_MARKERS = ("student", "beginner", "new to", "starting out", "undergraduate")
 
 
@@ -295,15 +308,21 @@ def build_learner_profile(
     student_name: str | None = None,
 ) -> str:
     """
-    Turn graph state into one explicit instruction line.
+    Turn graph state into one explicit instruction line for the persona.
 
-    `edges` are dicts with subject/predicate/object keys, exactly as returned
-    by graph_memory.fetch_live_subgraph.
+    Despite the historical name, this builds an AUDIENCE profile for any user —
+    researcher, engineer, founder, product/business leader, student, or general
+    visitor — not only a learner. The name and emitted level tokens are kept
+    for call-site and test compatibility. `edges` are dicts with
+    subject/predicate/object keys, exactly as returned by
+    graph_memory.fetch_live_subgraph.
     """
     mastered: list[str] = []
     struggling: list[str] = []
     curious: list[str] = []
     roles: list[str] = []
+    context: list[str] = []       # professional context: org, project, research
+    preferences: list[str] = []   # explicit stated preferences (answer depth, etc.)
 
     for e in edges:
         pred = e.get("predicate", "")
@@ -314,12 +333,22 @@ def build_learner_profile(
             mastered.append(obj)
         elif pred in ("struggles_with", "confused_about"):
             struggling.append(obj)
-        elif pred in ("curious_about", "wants_to_learn"):
+        elif pred in ("curious_about", "wants_to_learn", "interested_in"):
             curious.append(obj)
         elif pred in ("is", "works_in"):
             roles.append(obj)
+        # General professional / research context (migration 015). These both
+        # describe the person and steer calibration: "leads a startup" reads as
+        # business, "researches diffusion models" reads as advanced.
+        elif pred in ("works_at", "leads", "building", "researches", "collaborates_on"):
+            context.append(obj)
+            if pred == "researches":
+                roles.append("research")   # nudge calibration toward advanced
+        elif pred == "prefers":
+            preferences.append(obj)
 
-    role_text = " ".join(roles).lower()
+    # Roles AND professional context both inform the audience read.
+    role_text = " ".join(roles + context).lower()
 
     if any(m in role_text for m in _ADVANCED_MARKERS) or len(set(mastered)) >= 6:
         level = "advanced"
@@ -361,7 +390,9 @@ def build_learner_profile(
     if student_name:
         lines.append(f"Name: {student_name}.")
     if roles:
-        lines.append(f"Context they gave: {_top(roles, 3)}.")
+        lines.append(f"Role: {_top(roles, 3)}.")
+    if context:
+        lines.append(f"Professional context: {_top(context, 4)}.")
     if mastered:
         lines.append(
             f"Already solid on: {_top(mastered, 5)}. Do not re-teach these from scratch."
@@ -369,7 +400,11 @@ def build_learner_profile(
     if struggling:
         lines.append(f"Currently finding hard: {_top(struggling, 5)}. Slow down here.")
     if curious:
-        lines.append(f"Wants to learn: {_top(curious, 4)}.")
+        lines.append(f"Interested in: {_top(curious, 4)}.")
+    if preferences:
+        lines.append(
+            f"Stated preferences: {_top(preferences, 3)}. Honour these in how you answer."
+        )
     lines.append(guidance)
 
     return " ".join(lines)
