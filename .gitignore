@@ -17,6 +17,8 @@ AGENTS.md
 docs/audit/
 docs/BLOCKERS.md
 docs/COMMIT_PLAN.md
+docs/UI_DESIGN_SPECIFICATION.md
+docs/UI_IMPLEMENTATION_PROMPTS.md
 
 # Voice reference sample.
 # A biometric sample of a real, identifiable person does not belong in a
@@ -71,3 +73,5 @@ env
 
 #md
 technical_report.md
+
+.claude
