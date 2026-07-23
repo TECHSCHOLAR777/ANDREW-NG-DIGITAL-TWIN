@@ -1,4 +1,9 @@
 // components/KnowledgeGraphView.tsx
+/* eslint-disable react-hooks/set-state-in-effect */
+// This mirrors app/page.tsx: several effects here synchronise React state from
+// changing props (triplets/edges → derived React Flow graph). That is a
+// legitimate props-to-derived-state sync, and the file is slated for a full
+// rebuild in the Context Graph redesign phase.
 // ─────────────────────────────────────────────────────────────────────────────
 // React Flow knowledge graph visualizer.
 //
