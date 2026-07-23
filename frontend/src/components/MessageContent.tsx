@@ -38,7 +38,7 @@ function MessageContentImpl({ content }: MessageContentProps) {
   if (!content) return null;
 
   return (
-    <div className="message-prose text-[13px] leading-relaxed text-[var(--text)]">
+    <div className="message-prose text-[15px] leading-[1.65] text-[var(--text)]">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}

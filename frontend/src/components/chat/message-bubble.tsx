@@ -1,111 +1,151 @@
-import { BookOpen, Sparkles, User, Zap } from "lucide-react"
+import { BookOpen, ChevronDown, Sparkles } from "lucide-react"
 
 import { MessageContent } from "@/components/MessageContent"
-import type { Message } from "@/app/app/chat-types"
+import { StatusChip } from "@/components/ui/status-chip"
+import type { Message, RetrievedChunk } from "@/app/app/chat-types"
 
 /**
  * One turn in the transcript.
  *
- * Extracted verbatim from the page so the transcript can be reasoned about on
- * its own. Andrew turns carry the optional recall line, grounding notice,
- * citations, and cache badge; user turns are the compact right-aligned form.
- * Styling and behaviour are unchanged from the monolith.
+ * User turns are compact and right-aligned. Andrew turns use the broader
+ * editorial reading treatment: a grounding status in plain language, the answer
+ * itself, an optional recall line, and an inspectable source drawer. Cache
+ * telemetry and raw scores are intentionally NOT shown here; they belong in a
+ * developer view, not the normal conversation.
  */
+
+type Grounding = "grounded" | "related" | "general"
+
+/**
+ * Three honest states from the data the backend already sends: the grounded
+ * boolean plus whether any related material came back. No score is exposed.
+ */
+function groundingOf(msg: Message): Grounding | null {
+  if (msg.isGrounded === undefined) return null // restored message, no metadata
+  if (msg.isGrounded) return "grounded"
+  return (msg.retrievedChunks?.length ?? 0) > 0 ? "related" : "general"
+}
+
+const GROUNDING_LABEL: Record<Grounding, string> = {
+  grounded: "Grounded in Andrew's public work",
+  related: "Related material",
+  general: "General analysis",
+}
+
+// Source folders map to readable categories.
+const CATEGORY: Record<string, string> = {
+  lecture: "Lecture",
+  transcripts: "Transcript",
+  newsletter: "The Batch",
+  the_batch: "The Batch",
+  blog_posts: "Blog",
+  blog: "Blog",
+}
+
+function humanizeSource(file: string): string {
+  return file.replace(/\.txt$/i, "").replace(/[_-]+/g, " ").trim()
+}
+
 export function MessageBubble({ msg }: { msg: Message }) {
   const isUser = msg.role === "user"
+  const grounding = isUser ? null : groundingOf(msg)
+  const sources = msg.retrievedChunks ?? []
+
   return (
     <div
-      className={`flex gap-2 sm:gap-4 max-w-full sm:max-w-3xl min-w-0 ${
-        isUser ? "ml-auto flex-row-reverse" : ""
+      className={`flex gap-2 sm:gap-4 min-w-0 ${
+        isUser ? "ml-auto max-w-[85%] sm:max-w-lg flex-row-reverse" : "max-w-full sm:max-w-3xl"
       }`}
     >
       <div
-        className={`w-8 h-8 rounded-full flex items-center justify-center font-medium text-[13px] flex-shrink-0 ${
+        className={`w-8 h-8 rounded-full flex items-center justify-center font-semibold text-[12px] flex-shrink-0 ${
           isUser
-            ? "bg-[var(--text-muted)] text-[var(--brand-text)]"
+            ? "bg-[var(--surface-alt)] text-[var(--text-muted)]"
             : "bg-[var(--brand)] text-[var(--brand-text)]"
         }`}
       >
-        {isUser ? <User className="w-4 h-4" /> : "AN"}
+        {isUser ? "You" : "AN"}
       </div>
 
-      <div
-        className={`flex flex-col gap-3 p-3 sm:p-4 rounded-2xl text-[13px] leading-relaxed border min-w-0 break-words ${
-          isUser
-            ? "border-[var(--border)] bg-[var(--bg)] text-[var(--text)]"
-            : "border-[var(--border)] bg-[var(--surface)] text-[var(--text)] shadow-sm"
-        }`}
-      >
-        <div className="w-full min-w-0">
+      {isUser ? (
+        <div className="rounded-2xl rounded-tr-sm border border-[var(--border)] bg-[var(--surface-alt)] px-4 py-2.5 text-[15px] leading-relaxed text-[var(--text)] break-words min-w-0">
           <MessageContent content={msg.content} />
         </div>
+      ) : (
+        <div className="flex flex-col gap-3 min-w-0">
+          {grounding && (
+            <StatusChip tone={grounding === "grounded" ? "brand" : "neutral"}>
+              {GROUNDING_LABEL[grounding]}
+            </StatusChip>
+          )}
 
-        {!isUser && msg.recalled && msg.recalled.length > 0 && (
-          <div className="flex items-start gap-1.5 text-[12px] text-[var(--text-muted)] -mt-1">
-            <Sparkles className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-[var(--brand)]" />
-            <span>Building on what we covered before: {msg.recalled.join(", ")}</span>
-          </div>
-        )}
+          {msg.recalled && msg.recalled.length > 0 && (
+            <div className="flex items-start gap-1.5 text-[13px] text-[var(--text-muted)]">
+              <Sparkles className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-[var(--brand)]" />
+              <span>Building on what we covered before: {msg.recalled.join(", ")}</span>
+            </div>
+          )}
 
-        {!isUser && msg.isGrounded === false && (
-          <div
-            className="flex items-start gap-1.5 text-[11px] px-2.5 py-1.5 rounded-lg mt-1 border"
-            style={{
-              color: "var(--warn)",
-              background: "var(--warn-soft)",
-              borderColor: "var(--warn-border)",
-            }}
-          >
-            <span>
-              Outside Andrew&apos;s written material. This answer is his general
-              perspective rather than a grounded citation.
-            </span>
+          <div className="text-[15px] leading-[1.65] text-[var(--text)] break-words min-w-0">
+            <MessageContent content={msg.content} />
           </div>
-        )}
 
-        {!isUser && msg.retrievedChunks && msg.retrievedChunks.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 mt-2 border-t border-[var(--border)] pt-2">
-            <span className="text-[11px] text-[var(--text-muted)] font-medium block w-full">
-              {msg.isGrounded === false
-                ? "Closest material:"
-                : "From Andrew's materials:"}
-            </span>
-            {msg.retrievedChunks.slice(0, 3).map((chunk, cIdx) => (
-              <span
-                key={cIdx}
-                title={
-                  chunk.chunk_text
-                    ? `${chunk.chunk_text.slice(0, 300)}…`
-                    : `Score: ${chunk.final_score.toFixed(4)}`
-                }
-                className="text-[11px] text-[var(--brand)] hover:text-[var(--brand)]/80 bg-[var(--brand-soft)] px-2 py-1 rounded-lg border border-[var(--border)] max-w-[180px] truncate cursor-help flex items-center gap-1"
-              >
-                <BookOpen className="w-3 h-3 text-[var(--brand)] flex-shrink-0" />
-                {chunk.source_file.replace(/_/g, " ").replace(".txt", "")}
-              </span>
-            ))}
-          </div>
-        )}
-
-        {!isUser && (msg.cachedTokenCount ?? 0) > 0 && (
-          <div className="flex items-center gap-1.5 text-[11px] font-normal mt-1">
-            <span
-              className="flex items-center gap-0.5 px-2 py-0.5 rounded-full border"
-              style={{
-                color: "var(--ok)",
-                background: "var(--ok-soft)",
-                borderColor: "var(--border)",
-              }}
-            >
-              <Zap
-                className="w-3 h-3"
-                style={{ fill: "var(--ok)", color: "var(--ok)" }}
-              />
-              {msg.cachedTokenCount?.toLocaleString()} tokens served from cache
-            </span>
-          </div>
-        )}
-      </div>
+          {sources.length > 0 && <SourceDrawer sources={sources} grounding={grounding} />}
+        </div>
+      )}
     </div>
+  )
+}
+
+/**
+ * An inspectable, keyboard-accessible source list. Native details/summary so it
+ * opens with Enter/Space and is announced correctly. Shows a human title, the
+ * category, and a short excerpt; never the filename or a raw score.
+ */
+function SourceDrawer({
+  sources,
+  grounding,
+}: {
+  sources: RetrievedChunk[]
+  grounding: Grounding | null
+}) {
+  const heading =
+    grounding === "grounded"
+      ? "From Andrew's materials"
+      : "Closest related material"
+
+  return (
+    <details className="group rounded-xl border border-[var(--border)] bg-[var(--surface)]">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 text-[12px] text-[var(--text-muted)] hover:text-[var(--text)]">
+        <span className="flex items-center gap-1.5">
+          <BookOpen className="w-3.5 h-3.5 text-[var(--brand)]" />
+          {heading} ({sources.length})
+        </span>
+        <ChevronDown className="w-3.5 h-3.5 transition-transform group-open:rotate-180" />
+      </summary>
+      <ul className="flex flex-col gap-2 border-t border-[var(--border)] p-3">
+        {sources.slice(0, 4).map((s, i) => (
+          <li
+            key={i}
+            className="rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] p-2.5"
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-[13px] font-medium text-[var(--text)] truncate">
+                {humanizeSource(s.source_file)}
+              </span>
+              <span className="ml-auto shrink-0 rounded-full border border-[var(--border)] px-2 py-0.5 text-[10px] text-[var(--text-muted)]">
+                {CATEGORY[s.source_type] ?? "Source"}
+              </span>
+            </div>
+            {s.chunk_text && (
+              <p className="mt-1.5 text-[12px] leading-relaxed text-[var(--text-muted)] line-clamp-3">
+                {s.chunk_text.slice(0, 240)}
+                {s.chunk_text.length > 240 ? "…" : ""}
+              </p>
+            )}
+          </li>
+        ))}
+      </ul>
+    </details>
   )
 }
