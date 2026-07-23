@@ -2,115 +2,32 @@
 /* eslint-disable react-hooks/set-state-in-effect, react-hooks/immutability */
 
 import React, { useState, useEffect, useRef } from "react";
-import {
-  Send,
-  Plus,
-  Trash2,
-  Key,
-  BookOpen,
-  Volume2,
-  Mic,
-  MicOff,
-  Cpu,
-  RefreshCw,
-  Zap,
-  Headphones,
-  X,
-  Sliders,
-  Menu,
-  Sun,
-  Moon,
-  ChevronDown,
-  Sparkles,
-  User,
-} from "lucide-react";
-import { SlidingTabs } from "@/components/ui/sliding-tabs";
-import { KnowledgeGraphView } from "@/components/KnowledgeGraphView";
-import { MessageContent } from "@/components/MessageContent";
+import { useSession } from "next-auth/react";
+
 import { ErrorNotice, classifyError, type ChatError } from "@/components/ErrorNotice";
-import type { TripletRow, EdgeRow } from "@/types/graph";
-
-// Browser storage keys
-const KEY_LOCAL_STORAGE_GEMINI = "andrew_ng_byok_key";
-const KEY_LOCAL_STORAGE_TENANT = "andrew_ng_tenant_uuid";
-const KEY_LOCAL_STORAGE_ACTIVE = "andrew_ng_active_session";
-const KEY_LOCAL_STORAGE_THEME = "andrew_ng_theme";
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
-
-type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
-
-interface SpeechRecognitionResultEventLike {
-  results: {
-    [index: number]: {
-      [index: number]: {
-        transcript: string;
-      };
-    };
-  };
-}
-
-interface SpeechRecognitionErrorEventLike {
-  error: string;
-}
-
-interface SpeechRecognitionLike {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  onresult: ((event: SpeechRecognitionResultEventLike) => void) | null;
-  onend: (() => void) | null;
-  onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null;
-  start: () => void;
-  stop: () => void;
-}
-
-type SpeechWindow = Window &
-  typeof globalThis & {
-    SpeechRecognition?: SpeechRecognitionConstructor;
-    webkitSpeechRecognition?: SpeechRecognitionConstructor;
-  };
-
-interface RetrievedChunk {
-  source_file: string;
-  source_type: string;
-  final_score: number;
-  chunk_text?: string;
-}
-
-interface Message {
-  role: "user" | "assistant";
-  content: string;
-  /** Concepts from earlier sessions that informed this answer. */
-  recalled?: string[];
-  cacheStatus?: string;
-  cachedTokenCount?: number;
-  isGrounded?: boolean;
-  retrievedChunks?: RetrievedChunk[];
-}
-
-interface GraphContextNode {
-  node_id: string;
-  canonical_name: string;
-  node_type: TripletRow["node_type"];
-  hop_distance: number;
-  combined_score: number;
-}
-
-// Shown on an untouched conversation. Concrete questions teach what the twin
-// is for far faster than any description.
-const SUGGESTED_QUESTIONS = [
-  "What is gradient descent?",
-  "Explain the bias-variance tradeoff",
-  "How should I actually start learning ML?",
-];
-
-interface ChatSession {
-  id: string;
-  title: string;
-  messages: Message[];
-  triplets: TripletRow[];
-  edges: EdgeRow[];
-}
+import { SessionRail } from "@/components/chat/session-rail";
+import { ConversationHeader } from "@/components/chat/conversation-header";
+import { MessageBubble } from "@/components/chat/message-bubble";
+import { Composer } from "@/components/chat/composer";
+import { ContextGraphPanel } from "@/components/chat/context-graph-panel";
+import { VoiceOverlay } from "@/components/chat/voice-overlay";
+import type { TripletRow } from "@/types/graph";
+import {
+  KEY_LOCAL_STORAGE_GEMINI,
+  KEY_LOCAL_STORAGE_TENANT,
+  KEY_LOCAL_STORAGE_ACTIVE,
+  API_BASE_URL,
+  SUGGESTED_QUESTIONS,
+  type Message,
+  type GraphContextNode,
+  type ChatSession,
+  type RetrievedChunk,
+  type VoiceState,
+  type SpeechRecognitionLike,
+  type SpeechRecognitionResultEventLike,
+  type SpeechRecognitionErrorEventLike,
+  type SpeechWindow,
+} from "@/app/app/chat-types";
 
 export default function ChatPage() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -118,6 +35,9 @@ export default function ChatPage() {
   const [userInput, setUserInput] = useState("");
   const [geminiKey, setGeminiKey] = useState("");
   const [tenantId, setTenantId] = useState("");
+  // When signed in, the account owns a tenant that follows the user across
+  // devices. A guest keeps the per-browser tenant generated below.
+  const { data: authSession, status: authStatus } = useSession();
   const [graphView, setGraphView] = useState<"session" | "global">("session");
   const [isLoading, setIsLoading] = useState(false);
   const [isSyncingGraph, setIsSyncingGraph] = useState(false);
@@ -136,7 +56,7 @@ export default function ChatPage() {
   // Voice controls
   const [readAloudEnabled, setReadAloudEnabled] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
-  const [voiceState, setVoiceState] = useState<"inactive" | "listening" | "thinking" | "speaking">("inactive");
+  const [voiceState, setVoiceState] = useState<VoiceState>("inactive");
   
   // Pedagogical Speed settings
   const [ttsSpeed, setTtsSpeed] = useState<number>(1.0);
@@ -169,21 +89,9 @@ export default function ChatPage() {
   const voiceCloseRef = useRef<HTMLButtonElement>(null);
   const focusBeforeModalRef = useRef<HTMLElement | null>(null);
 
-  // Colour theme. Defaults to the system preference; an explicit choice is
-  // remembered and wins over it in both directions.
-  const [theme, setTheme] = useState<"system" | "light" | "dark">("system");
-
-  useEffect(() => {
-    const saved = localStorage.getItem(KEY_LOCAL_STORAGE_THEME) as typeof theme | null;
-    if (saved) setTheme(saved);
-  }, []);
-
-  useEffect(() => {
-    const root = document.documentElement;
-    if (theme === "system") root.removeAttribute("data-theme");
-    else root.setAttribute("data-theme", theme);
-    localStorage.setItem(KEY_LOCAL_STORAGE_THEME, theme);
-  }, [theme]);
+  // Theme is owned by the global ThemeProvider now (marketing and app share
+  // one system); the header's theme control uses it directly, so the app keeps
+  // no theme state of its own.
 
   // Modal behaviour: Escape closes, focus moves in on open and returns to
   // wherever it came from on close. Without this a keyboard user could tab
@@ -233,6 +141,9 @@ export default function ChatPage() {
     // Restore conversations from the server. Every turn has always been
     // written to Postgres; nothing ever read them back, so a refresh destroyed
     // history that was sitting safely in the database the whole time.
+    //
+    // For a signed-in user the account tenant takes over in the effect below,
+    // which re-restores against it; a guest stays on this per-browser tenant.
     void restoreSessions(savedTenant);
 
     // Setup Speech Recognition
@@ -290,6 +201,22 @@ export default function ChatPage() {
     // Speech recognition is initialized once so browser callbacks can call the latest ref-backed state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // When authentication resolves to a signed-in account, switch to the tenant
+  // that account owns so memory follows the user across devices. A guest is
+  // left on the per-browser tenant set at mount.
+  useEffect(() => {
+    if (authStatus !== "authenticated") return;
+    const accountTenant = authSession?.user?.tenantId;
+    if (!accountTenant || accountTenant === tenantId) return;
+    localStorage.setItem(KEY_LOCAL_STORAGE_TENANT, accountTenant);
+    localStorage.removeItem(KEY_LOCAL_STORAGE_ACTIVE);
+    setTenantId(accountTenant);
+    void restoreSessions(accountTenant);
+    // restoreSessions is a stable inner function; tenantId is intentionally a
+    // trigger, not a subscription.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authStatus, authSession?.user?.tenantId]);
 
   // Monitor voiceState transitions to start/stop the web speech capture
   useEffect(() => {
@@ -885,7 +812,7 @@ export default function ChatPage() {
         s.id === activeSession.id
           ? {
               ...s,
-              title: s.title === "New Dialogue" ? messageText.slice(0, 24) + "..." : s.title,
+              title: s.title === "New conversation" ? messageText.slice(0, 24) + "..." : s.title,
               messages: updatedMessages
             }
           : s

@@ -3,6 +3,7 @@
 import * as React from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
+import { useSession, signOut } from "next-auth/react"
 import { Menu, X } from "lucide-react"
 
 import { cn } from "@/lib/utils"
@@ -26,6 +27,8 @@ const TABS = [
 
 export function SiteHeader() {
   const pathname = usePathname()
+  const { status } = useSession()
+  const authed = status === "authenticated"
   const [scrolled, setScrolled] = React.useState(false)
   const [menuOpen, setMenuOpen] = React.useState(false)
 
@@ -88,12 +91,30 @@ export function SiteHeader() {
             )
           })}
           <ThemeToggle className="ml-1" />
-          <Link
-            href="/login"
-            className="ml-1 rounded-full bg-[var(--brand)] px-4 py-1.5 text-sm font-medium text-[var(--brand-text)] transition-opacity hover:opacity-90"
-          >
-            Enter the Twin
-          </Link>
+          {authed ? (
+            <>
+              <button
+                type="button"
+                onClick={() => signOut({ callbackUrl: "/" })}
+                className="rounded-full px-3.5 py-1.5 text-sm text-[var(--text-muted)] transition-colors hover:text-[var(--text)]"
+              >
+                Sign out
+              </button>
+              <Link
+                href="/app"
+                className="ml-1 rounded-full bg-[var(--brand)] px-4 py-1.5 text-sm font-medium text-[var(--brand-text)] transition-opacity hover:opacity-90"
+              >
+                Open the Twin
+              </Link>
+            </>
+          ) : (
+            <Link
+              href="/login"
+              className="ml-1 rounded-full bg-[var(--brand)] px-4 py-1.5 text-sm font-medium text-[var(--brand-text)] transition-opacity hover:opacity-90"
+            >
+              Enter the Twin
+            </Link>
+          )}
         </nav>
 
         {/* Mobile controls */}
@@ -138,13 +159,35 @@ export function SiteHeader() {
                 </Link>
               )
             })}
-            <Link
-              href="/login"
-              onClick={() => setMenuOpen(false)}
-              className="mt-1 rounded-xl bg-[var(--brand)] px-4 py-2.5 text-center text-sm font-medium text-[var(--brand-text)] transition-opacity hover:opacity-90"
-            >
-              Enter the Twin
-            </Link>
+            {authed ? (
+              <>
+                <Link
+                  href="/app"
+                  onClick={() => setMenuOpen(false)}
+                  className="mt-1 rounded-xl bg-[var(--brand)] px-4 py-2.5 text-center text-sm font-medium text-[var(--brand-text)] transition-opacity hover:opacity-90"
+                >
+                  Open the Twin
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuOpen(false)
+                    signOut({ callbackUrl: "/" })
+                  }}
+                  className="rounded-xl px-4 py-2.5 text-left text-sm text-[var(--text-muted)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
+                >
+                  Sign out
+                </button>
+              </>
+            ) : (
+              <Link
+                href="/login"
+                onClick={() => setMenuOpen(false)}
+                className="mt-1 rounded-xl bg-[var(--brand)] px-4 py-2.5 text-center text-sm font-medium text-[var(--brand-text)] transition-opacity hover:opacity-90"
+              >
+                Enter the Twin
+              </Link>
+            )}
           </nav>
         </div>
       )}
