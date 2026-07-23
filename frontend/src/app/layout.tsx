@@ -2,7 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { Poppins, Source_Sans_3 } from "next/font/google";
 import { cn } from "@/lib/utils";
-import { ThemeProvider, themeInitScript } from "@/components/theme-provider";
+import { themeInitScript } from "@/components/theme-provider";
+import { Providers } from "@/components/providers";
 
 /**
  * Typography follows the two sites this project's audience already reads.
@@ -61,7 +62,7 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
       </head>
       <body className="min-h-full flex flex-col">
-        <ThemeProvider>{children}</ThemeProvider>
+        <Providers>{children}</Providers>
       </body>
     </html>
   );
