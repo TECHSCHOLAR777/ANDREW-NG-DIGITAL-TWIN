@@ -1,15 +1,23 @@
 "use client"
 
+import * as React from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
+import { Menu, X } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+import { NetworkMonogram } from "@/components/network-monogram"
+import { ThemeToggle } from "@/components/theme-toggle"
 
 /**
- * Marketing navigation.
+ * Public navigation.
  *
- * Three destinations, not eight. The product has one thing to explain and one
- * thing to do, so a wide menu would be inventing structure that does not exist.
+ * Two destinations, not eight: the product has one thing to explain and one
+ * thing to do, so a wide menu would invent structure that does not exist. The
+ * bar is a real responsive surface — a floating glass pill on desktop, a
+ * compact menu sheet on mobile — built on the unified theme tokens so it reads
+ * correctly in light and dark. It grows slightly more opaque after scrolling so
+ * it stays legible over the animated hero.
  */
 const TABS = [
   { href: "/", label: "Overview" },
@@ -18,25 +26,49 @@ const TABS = [
 
 export function SiteHeader() {
   const pathname = usePathname()
+  const [scrolled, setScrolled] = React.useState(false)
+  const [menuOpen, setMenuOpen] = React.useState(false)
+
+  React.useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 8)
+    onScroll()
+    window.addEventListener("scroll", onScroll, { passive: true })
+    return () => window.removeEventListener("scroll", onScroll)
+  }, [])
+
+  // Escape closes the mobile menu.
+  React.useEffect(() => {
+    if (!menuOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenuOpen(false)
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [menuOpen])
 
   return (
     <header className="fixed inset-x-0 top-0 z-50">
-      {/* The blur rather than a solid fill: the hero animates underneath, and
-          hiding that behind an opaque bar wastes the one thing worth looking
-          at. */}
-      <div className="mx-auto mt-4 flex w-[min(1100px,calc(100%-2rem))] items-center justify-between rounded-full border border-white/10 bg-black/40 px-2 py-2 backdrop-blur-xl">
+      <div
+        className={cn(
+          "mx-auto mt-4 flex w-[min(1100px,calc(100%-2rem))] items-center justify-between",
+          "rounded-full border px-2 py-2 transition-colors duration-200",
+          "border-[var(--border)] backdrop-blur-xl",
+          scrolled
+            ? "bg-[var(--surface-glass)] shadow-[0_8px_30px_-12px_var(--glass-shadow)]"
+            : "bg-[color-mix(in_srgb,var(--surface)_45%,transparent)]"
+        )}
+      >
         <Link
           href="/"
-          className="flex items-center gap-2.5 rounded-full px-3 py-1.5 text-sm font-medium text-white/90 transition-colors hover:text-white"
+          className="flex items-center gap-2.5 rounded-full px-3 py-1.5 text-sm font-medium text-[var(--text)] transition-colors hover:text-[var(--brand)]"
         >
-          <span className="grid size-6 place-items-center rounded-md bg-white/10 text-[11px] font-semibold text-white">
-            AN
-          </span>
+          <NetworkMonogram className="size-6 text-[var(--text)]" />
           <span className="hidden sm:inline">Andrew Ng Digital Twin</span>
           <span className="sm:hidden">Digital Twin</span>
         </Link>
 
-        <nav className="flex items-center gap-1">
+        {/* Desktop nav */}
+        <nav className="hidden items-center gap-1 sm:flex">
           {TABS.map((tab) => {
             const active = pathname === tab.href
             return (
@@ -45,25 +77,77 @@ export function SiteHeader() {
                 href={tab.href}
                 aria-current={active ? "page" : undefined}
                 className={cn(
-                  "rounded-full px-3.5 py-1.5 text-sm transition-colors sm:px-4",
+                  "rounded-full px-4 py-1.5 text-sm transition-colors",
                   active
-                    ? "bg-white/10 text-white"
-                    : "text-white/60 hover:text-white/90"
+                    ? "bg-[var(--surface-hover)] text-[var(--text)]"
+                    : "text-[var(--text-muted)] hover:text-[var(--text)]"
                 )}
               >
                 {tab.label}
               </Link>
             )
           })}
-
+          <ThemeToggle className="ml-1" />
           <Link
             href="/login"
-            className="ml-1 rounded-full bg-white px-4 py-1.5 text-sm font-medium text-black transition-opacity hover:opacity-90"
+            className="ml-1 rounded-full bg-[var(--brand)] px-4 py-1.5 text-sm font-medium text-[var(--brand-text)] transition-opacity hover:opacity-90"
           >
-            Start using
+            Enter the Twin
           </Link>
         </nav>
+
+        {/* Mobile controls */}
+        <div className="flex items-center gap-1 sm:hidden">
+          <ThemeToggle />
+          <button
+            type="button"
+            aria-label={menuOpen ? "Close menu" : "Open menu"}
+            aria-expanded={menuOpen}
+            aria-controls="mobile-menu"
+            onClick={() => setMenuOpen((v) => !v)}
+            className="grid size-9 place-items-center rounded-full border border-[var(--border)] text-[var(--text-muted)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
+          >
+            {menuOpen ? <X className="size-4" /> : <Menu className="size-4" />}
+          </button>
+        </div>
       </div>
+
+      {/* Mobile menu sheet */}
+      {menuOpen && (
+        <div
+          id="mobile-menu"
+          className="mx-auto mt-2 w-[min(1100px,calc(100%-2rem))] rounded-2xl border border-[var(--border)] bg-[var(--surface-glass)] p-2 shadow-[0_8px_30px_-12px_var(--glass-shadow)] backdrop-blur-xl sm:hidden"
+        >
+          <nav className="flex flex-col gap-1">
+            {TABS.map((tab) => {
+              const active = pathname === tab.href
+              return (
+                <Link
+                  key={tab.href}
+                  href={tab.href}
+                  aria-current={active ? "page" : undefined}
+                  onClick={() => setMenuOpen(false)}
+                  className={cn(
+                    "rounded-xl px-4 py-2.5 text-sm transition-colors",
+                    active
+                      ? "bg-[var(--surface-hover)] text-[var(--text)]"
+                      : "text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
+                  )}
+                >
+                  {tab.label}
+                </Link>
+              )
+            })}
+            <Link
+              href="/login"
+              onClick={() => setMenuOpen(false)}
+              className="mt-1 rounded-xl bg-[var(--brand)] px-4 py-2.5 text-center text-sm font-medium text-[var(--brand-text)] transition-opacity hover:opacity-90"
+            >
+              Enter the Twin
+            </Link>
+          </nav>
+        </div>
+      )}
     </header>
   )
 }
