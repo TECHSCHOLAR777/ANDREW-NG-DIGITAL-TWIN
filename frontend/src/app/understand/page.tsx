@@ -1,6 +1,7 @@
 import Link from "next/link"
 
 import { SiteHeader } from "@/components/site-header"
+import { SiteFooter } from "@/components/site-footer"
 
 export const metadata = {
   title: "How it works — Andrew Ng Digital Twin",
@@ -40,7 +41,7 @@ const STEPS = [
 
 export default function UnderstandPage() {
   return (
-    <div className="min-h-screen bg-[#050505] text-white">
+    <div className="theme-dark min-h-screen bg-[var(--bg)] text-[var(--text)]">
       <SiteHeader />
 
       <main className="mx-auto w-[min(900px,calc(100%-2rem))] pt-36 pb-24">
@@ -104,12 +105,7 @@ export default function UnderstandPage() {
         </div>
       </main>
 
-      <footer className="border-t border-white/[0.06]">
-        <div className="mx-auto w-[min(900px,calc(100%-2rem))] py-8 text-sm text-white/35">
-          An educational project. Not affiliated with or endorsed by Andrew Ng,
-          DeepLearning.AI or Stanford.
-        </div>
-      </footer>
+      <SiteFooter />
     </div>
   )
 }

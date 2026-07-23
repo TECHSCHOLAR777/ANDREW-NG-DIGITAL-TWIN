@@ -19,7 +19,7 @@ export function AuthCard({ mode }: AuthCardProps) {
   const isLogin = mode === "login"
 
   return (
-    <div className="flex min-h-[100svh] items-center justify-center bg-[#050505] px-4 py-16 text-white">
+    <div className="theme-dark flex min-h-[100svh] items-center justify-center bg-[var(--bg)] px-4 py-16 text-[var(--text)]">
       <div className="w-full max-w-[400px]">
         <Link
           href="/"
