@@ -21,13 +21,13 @@ const EXCHANGES: Record<
     label: "Researcher",
     ask: "Where does the bias–variance decomposition actually break down in practice?",
     reply:
-      "So the decomposition assumes squared loss and a fixed target distribution. The moment you're doing representation learning, the \"variance\" term starts absorbing optimisation noise and data-order effects, and it stops cleanly predicting test error — which is why I'd look at the learning curves before trusting the tidy story.",
+      "So the decomposition assumes squared loss and a fixed target distribution. The moment you're doing representation learning, the \"variance\" term starts absorbing optimisation noise and data-order effects, and it stops cleanly predicting test error. That's why I'd look at the learning curves before trusting the tidy story.",
   },
   product: {
     label: "Product leader",
     ask: "How do I decide which part of our workflow to automate with AI first?",
     reply:
-      "I'd start with the one-second rule: anything a person on your team does in about a second of thought is a candidate now. Then ask whether you can specify the input and the desired output clearly. If you can, that's your first automation — and the metric to watch is throughput on that subtask, not model accuracy in isolation.",
+      "I'd start with the one-second rule: anything a person on your team does in about a second of thought is a candidate now. Then ask whether you can specify the input and the desired output clearly. If you can, that's your first automation, and the metric to watch is throughput on that subtask, not model accuracy in isolation.",
   },
   founder: {
     label: "Founder",
@@ -39,7 +39,7 @@ const EXCHANGES: Record<
     label: "Learner",
     ask: "I keep getting lost in gradient descent. Can you explain it simply?",
     reply:
-      "Picture walking downhill in thick fog. You can't see the whole valley — only the slope right under your feet. So you feel which way is down, take a small step, and check again. That step size is your learning rate: too big and you overshoot the bottom, too small and you're there all day.",
+      "Picture walking downhill in thick fog. You can't see the whole valley, only the slope right under your feet. So you feel which way is down, take a small step, and check again. That step size is your learning rate: too big and you overshoot the bottom, too small and you're there all day.",
   },
 }
 
@@ -75,7 +75,7 @@ export function AdaptiveConversation() {
       </div>
 
       <p className="mt-6 border-t border-[var(--border)] pt-4 text-[12px] text-[var(--text-subtle)]">
-        Same twin, same source material — only the depth and framing change.
+        Same twin, same source material. Only the depth and framing change.
         Illustrative examples, not a live conversation.
       </p>
     </div>

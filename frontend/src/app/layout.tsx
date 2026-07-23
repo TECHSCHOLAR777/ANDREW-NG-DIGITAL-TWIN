@@ -35,7 +35,7 @@ const sans = Source_Sans_3({
 export const metadata: Metadata = {
   title: "Andrew Ng Digital Twin",
   description:
-    "Converse with a grounded, unofficial AI recreation of Andrew Ng's public knowledge, reasoning, and voice — with contextual memory across sessions. An academic project, not affiliated with or endorsed by Andrew Ng.",
+    "Converse with a grounded, unofficial AI recreation of Andrew Ng's public knowledge, reasoning, and voice, with contextual memory across sessions. An academic project, not affiliated with or endorsed by Andrew Ng.",
 };
 
 export default function RootLayout({
