@@ -6,8 +6,17 @@ down where the boundaries are before someone else asks.
 
 ## What it is
 
-An unofficial, educational AI recreation of Andrew Ng's teaching style,
-grounded in his public writing and lectures.
+An unofficial, academic AI recreation of Andrew Ng — a **digital twin** of his
+public knowledge, reasoning habits, communication style, and voice, grounded in
+his public writing and lectures. Teaching is one of its behaviours, not its
+whole purpose: it is built to converse with researchers, engineers, founders,
+product and business leaders, students, and the general public.
+
+As an academic demonstration of digital-twin techniques, it **deliberately**
+uses a reconstructed portrait of Andrew Ng and a synthetic voice modelled on
+his. Those choices are made openly, with the guardrails below — a visible
+unofficial-recreation disclosure, a persistent synthetic-voice label, and an
+audio provenance watermark that stays enabled — not hidden.
 
 It is **not** affiliated with, endorsed by, reviewed by, or connected to Andrew
 Ng, Stanford University, DeepLearning.AI, Landing AI, or AI Fund. Nobody named
@@ -32,7 +41,7 @@ line, so the disclosure does not depend on anyone thinking to ask.
 
 ## The corpus
 
-The tutor is grounded in publicly available material:
+The twin is grounded in publicly available material:
 
 - Stanford CS229 lecture notes and recorded lectures
 - Machine Learning Yearning
@@ -46,9 +55,9 @@ How that shapes the product:
 
 - Retrieved passages are shown as **short excerpts to indicate a source**, not
   as full reproductions, and the UI points at where a passage came from.
-- The tutor is instructed to teach from the material rather than recite it.
-- It is a study aid, not a replacement for reading the originals, and it is not
-  a distribution channel for them.
+- The twin is instructed to answer from the material rather than recite it.
+- It is an aid, not a replacement for reading the originals, and it is not a
+  distribution channel for them.
 
 If a rights holder objects to any part of this, the correct response is to
 remove it, not to argue.
@@ -57,15 +66,25 @@ remove it, not to argue.
 
 The repository contains a reference audio sample used for voice cloning.
 Cloning the voice of a real, identifiable person is a different act from
-writing in their style, and it is treated as such:
+writing in their style, and it is treated as such. As a digital-twin
+demonstration the cloned voice is used deliberately, under these conditions:
 
 - The synthetic-audio **watermarker stays enabled**. An earlier version
   replaced it with a passthrough stub to work around a crash; that is now a
   loud warning rather than a silent bypass, because stripping a provenance
   marker from cloned speech of a real person is indefensible.
-- The cloned voice is a **local capability**, not something to serve from a
-  public URL.
-- A public deployment should use a neutral voice, or none.
+- The interface carries a **persistent, visible "synthetic voice" label** so a
+  listener is never left to assume the audio is a real recording.
+- The cloned voice runs on a **local/self-hosted** capability. When it is
+  unavailable the product falls back to a neutral browser voice and says so;
+  it never presents the generic browser voice as the clone.
+
+## The portrait
+
+The landing page and app use a reconstructed particle portrait built from a
+public photograph of Andrew Ng. It is a deliberate part of the twin's identity.
+It is presented as an unofficial recreation, never as an official likeness or
+endorsement, and it is not passed off as an authentic photograph or signature.
 
 ## If this is ever deployed publicly
 
@@ -74,8 +93,10 @@ The following are not optional:
 1. The unofficial-recreation line stays visible, not buried in a footer.
 2. Do not use Andrew Ng's name in a domain, product name, or anything that
    implies endorsement. A repository name is fine; a branded site is not.
-3. Do not use his likeness, photograph, or signature.
-4. Serve a non-cloned voice.
+3. The portrait and synthetic voice may be used as part of the twin, but always
+   with the unofficial-recreation disclosure and the synthetic-voice label
+   visible, and never in a way that implies endorsement or authenticity.
+4. Keep the audio provenance watermark enabled.
 5. Link [PRIVACY.md](PRIVACY.md) from the interface, including the point about
    free-tier content being usable for model training.
 6. Provide a way to report a problem and act on it.
@@ -85,7 +106,9 @@ The following are not optional:
 - Claim endorsement or affiliation it does not have.
 - Present generated text as something Andrew Ng actually said or wrote.
 - Reproduce the corpus wholesale rather than excerpt it.
-- Use the cloned voice to say things attributed to him as fact.
+- Use the cloned voice or portrait to attribute statements to him as fact, or
+  to communicate or transact externally as if it were him.
+- Strip the synthetic-voice label or the audio provenance watermark.
 
 ## Why this document exists
 

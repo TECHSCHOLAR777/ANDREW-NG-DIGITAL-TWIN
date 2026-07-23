@@ -5,30 +5,37 @@ understand owes them a straight answer about where that goes.
 
 ## What this is
 
-An unofficial AI recreation of Andrew Ng, built for learning. It is not
-affiliated with, endorsed by, or reviewed by Andrew Ng, Stanford, or
-DeepLearning.AI. It is not him, and if you ask it directly it will tell you so.
+An unofficial, academic AI recreation of Andrew Ng. You can converse with it
+about research, engineering, AI products and strategy, careers, or learning —
+it is a general digital twin, not only a tutor. It is not affiliated with,
+endorsed by, or reviewed by Andrew Ng, Stanford, or DeepLearning.AI. It is not
+him, and if you ask it directly it will tell you so.
 
 ## What gets stored
 
-When you use the tutor, the following is written to a PostgreSQL database:
+When you use the twin, the following is written to a PostgreSQL database:
 
 | Data | Why | Where |
 |---|---|---|
-| Your messages and the tutor's replies | So conversations survive a refresh and can be reopened | `conversation_turns` |
-| Concepts you mention, and whether you are struggling with or have mastered them | This is the memory feature: it is how the tutor picks up where you left off | `entity_nodes`, `relation_edges` |
-| Short quotes from your messages | Evidence for why a belief was recorded, so you can see and correct it | `relation_edges.evidence` |
+| Your messages and the twin's replies | So conversations survive a refresh and can be reopened | `conversation_turns` |
+| Context you share — concepts you mention, your role, organisation, projects, goals, and stated preferences, and what you are learning or working on | This is the memory feature: it is how the twin carries context across sessions | `entity_nodes`, `relation_edges` |
+| Short quotes from your messages | Evidence for why something was recorded, so you can see and correct it | `relation_edges.evidence` |
 | A conversation title, taken from your first message | The sidebar | `chat_sessions` |
 | A random identifier for your browser | Ties your conversations together without an account | browser localStorage |
 
 There is no account, no email address, and no password. The identifier in your
-browser is the only thing linking one session to another.
+browser is the only thing linking one session to another. The twin does not
+intentionally record passwords, API keys, payment or government identifiers,
+private addresses, or sensitive personal attributes; if it ever captures
+something it should not have, you can delete it (see below).
 
 ## What is NOT stored
 
 - **Your API key.** It is held in `sessionStorage`, which the browser clears
-  when you close the tab. It is sent with each request and used to call Google,
-  then discarded. It is never written to the database or to a log.
+  when you close the tab. It is sent with each request **to this application's
+  backend**, which uses it to call Google and then discards it. It is **not**
+  stored — never written to the database or to a log — but it is transmitted
+  through the backend, so this is not an "it never leaves your browser" claim.
 - **Audio.** Speech is transcribed by the browser and only the resulting text
   is sent onward.
 
