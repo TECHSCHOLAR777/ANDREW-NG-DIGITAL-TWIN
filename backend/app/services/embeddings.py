@@ -344,6 +344,14 @@ def _is_rate_limit(exc: BaseException) -> bool:
     return "429" in m or "quota" in m or "resource_exhausted" in m or "rate" in m
 
 
+def _is_transient_network(exc: BaseException) -> bool:
+    m = str(exc).lower()
+    return (
+        "connection" in m or "timeout" in m or "reset" in m
+        or "10054" in m or "eof" in m or "broken pipe" in m
+    )
+
+
 def _is_daily_quota(exc: BaseException) -> bool:
     """
     Distinguish the daily cap from the per-minute one.
@@ -478,20 +486,29 @@ def embed_documents(
                         f"google-genai is installed, since the fallback SDK "
                         f"spends 100x the quota."
                     ) from exc
-                if not _is_rate_limit(exc):
+                is_rl = _is_rate_limit(exc)
+                is_net = _is_transient_network(exc)
+                if not is_rl and not is_net:
                     raise EmbeddingError(f"Embedding failed at item {i}: {exc}") from exc
                 if attempt == max_attempts - 1:
                     raise EmbeddingError(
-                        f"Per-minute rate limit at item {i} did not clear after "
-                        f"{max_attempts} attempts. Re-run to resume; already-"
+                        f"{'Rate limit' if is_rl else 'Network error'} at item {i} did not "
+                        f"clear after {max_attempts} attempts. Re-run to resume; already-"
                         f"embedded files are skipped."
                     ) from exc
-                hint = _retry_delay_seconds(exc, fallback=65.0)
-                wait = max(hint, 65.0) + attempt * 2
-                logger.info(
-                    "Rate limited at item %d (attempt %d/%d), waiting %.0fs — %s",
-                    i, attempt + 1, max_attempts, wait, exc,
-                )
+                if is_net:
+                    wait = 5.0 + attempt * 3
+                    logger.info(
+                        "Network error at item %d (attempt %d/%d), retrying in %.0fs — %s",
+                        i, attempt + 1, max_attempts, wait, exc,
+                    )
+                else:
+                    hint = _retry_delay_seconds(exc, fallback=65.0)
+                    wait = max(hint, 65.0) + attempt * 2
+                    logger.info(
+                        "Rate limited at item %d (attempt %d/%d), waiting %.0fs — %s",
+                        i, attempt + 1, max_attempts, wait, exc,
+                    )
                 time.sleep(wait)
 
         i += batch_size
