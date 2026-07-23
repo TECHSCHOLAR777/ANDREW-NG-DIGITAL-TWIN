@@ -266,7 +266,7 @@ export default function ChatPage() {
   const GREETING: Message = {
     role: "assistant",
     content:
-      "Hello! I am Andrew Ng. I teach machine learning concepts using CS229 notes and DeepLearning.ai resources. Ask me anything about neural networks, bias-variance analysis, or AI strategy.",
+      "Hi, I'm Andrew Ng, or rather a grounded recreation of him built from my public work. Ask me about machine learning, research, building AI products, career moves, or where the field is headed. I'll answer from what I've actually written and taught.",
   };
 
   const makeEmptySession = (title = "New conversation"): ChatSession => ({
