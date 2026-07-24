@@ -1,6 +1,7 @@
 import {
   ChevronDown,
   Key,
+  MessageSquare,
   Plus,
   Sliders,
   Trash2,
@@ -8,6 +9,8 @@ import {
 } from "lucide-react"
 
 import { NetworkMonogram } from "@/components/network-monogram"
+import { Skeleton } from "@/components/ui/skeleton"
+import { EmptyState } from "@/components/ui/empty-state"
 import type { ChatSession } from "@/app/app/chat-types"
 
 /**
@@ -20,6 +23,7 @@ import type { ChatSession } from "@/app/app/chat-types"
 export function SessionRail({
   sessions,
   activeSessionId,
+  sessionsLoading,
   geminiKey,
   ttsSpeed,
   settingsOpen,
@@ -35,6 +39,7 @@ export function SessionRail({
 }: {
   sessions: ChatSession[]
   activeSessionId: string | null
+  sessionsLoading: boolean
   geminiKey: string
   ttsSpeed: number
   settingsOpen: boolean
@@ -183,31 +188,49 @@ export function SessionRail({
       )}
 
       <div className="flex-1 overflow-y-auto px-3 py-2 flex flex-col gap-1.5">
-        {sessions.map((session) => {
-          const isActive = session.id === activeSessionId
-          return (
-            <div
-              key={session.id}
-              onClick={() => onSelectSession(session.id)}
-              className={`group px-3 py-2.5 rounded-lg cursor-pointer flex items-center justify-between transition ${
-                isActive
-                  ? "bg-[var(--brand-soft)] border border-[var(--border)] text-[var(--brand)]"
-                  : "hover:bg-[var(--bg)] text-[var(--text-muted)] hover:text-[var(--text)]"
-              }`}
-            >
-              <span className="text-[13px] font-normal truncate max-w-[160px]">
-                {session.title}
-              </span>
-              <button
-                onClick={(e) => onDeleteChat(session.id, e)}
-                aria-label={`Delete conversation: ${session.title}`}
-                className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 p-1 text-[var(--text-muted)] hover:text-[var(--danger)] transition"
+        {sessionsLoading ? (
+          <>
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="px-3 py-2.5 rounded-lg flex items-center justify-between gap-3">
+                <Skeleton className="h-4 flex-1 rounded" />
+                <Skeleton className="h-3 w-10 rounded" />
+              </div>
+            ))}
+          </>
+        ) : sessions.length === 0 ? (
+          <EmptyState
+            icon={<MessageSquare />}
+            title="No conversations yet"
+            description="Start a new conversation above."
+            className="py-6"
+          />
+        ) : (
+          sessions.map((session) => {
+            const isActive = session.id === activeSessionId
+            return (
+              <div
+                key={session.id}
+                onClick={() => onSelectSession(session.id)}
+                className={`group px-3 py-2.5 rounded-lg cursor-pointer flex items-center justify-between transition ${
+                  isActive
+                    ? "bg-[var(--brand-soft)] border border-[var(--border)] text-[var(--brand)]"
+                    : "hover:bg-[var(--bg)] text-[var(--text-muted)] hover:text-[var(--text)]"
+                }`}
               >
-                <Trash2 className="w-4 h-4" />
-              </button>
-            </div>
-          )
-        })}
+                <span className="text-[13px] font-normal truncate max-w-[160px]">
+                  {session.title}
+                </span>
+                <button
+                  onClick={(e) => onDeleteChat(session.id, e)}
+                  aria-label={`Delete conversation: ${session.title}`}
+                  className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 p-1 text-[var(--text-muted)] hover:text-[var(--danger)] transition"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            )
+          })
+        )}
       </div>
     </div>
   )

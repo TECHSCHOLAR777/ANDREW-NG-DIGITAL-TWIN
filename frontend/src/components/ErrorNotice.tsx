@@ -19,7 +19,7 @@
 import React from "react";
 import { AlertCircle, KeyRound, Clock, WifiOff, RefreshCw } from "lucide-react";
 
-export type ErrorKind = "auth" | "rate_limit" | "offline" | "server" | "unknown";
+export type ErrorKind = "auth" | "config" | "rate_limit" | "offline" | "server" | "unknown";
 
 export interface ChatError {
   kind: ErrorKind;
@@ -31,24 +31,30 @@ export interface ChatError {
 export function classifyError(status: number | null, detail: string): ChatError {
   const text = (detail || "").toLowerCase();
 
-  if (status === 401 || text.includes("api key is required")) {
+  if (text.includes("api key is required") || text.includes("no api key")) {
+    return {
+      kind: "config",
+      message: "Add your Gemini API key in Settings to start chatting.",
+    };
+  }
+  if (status === 401) {
     return {
       kind: "auth",
-      message: "This needs your own Gemini API key before it can answer.",
+      message: "Sign in to continue.",
     };
   }
   if (status === 429 || text.includes("rate limit") || text.includes("quota")) {
     const match = detail.match(/(\d+)\s*second/);
     return {
       kind: "rate_limit",
-      message: "Too many requests in a short window.",
+      message: "Too many requests. Wait a moment and try again.",
       retryAfterSeconds: match ? parseInt(match[1], 10) : 30,
     };
   }
   if (status === null || text.includes("failed to fetch") || text.includes("networkerror")) {
     return {
       kind: "offline",
-      message: "Could not reach the server. It may not be running.",
+      message: "Could not reach the server. Check your connection.",
     };
   }
   if (status && status >= 500) {
@@ -62,6 +68,7 @@ export function classifyError(status: number | null, detail: string): ChatError 
 
 const ICONS: Record<ErrorKind, React.ComponentType<{ className?: string }>> = {
   auth: KeyRound,
+  config: KeyRound,
   rate_limit: Clock,
   offline: WifiOff,
   server: AlertCircle,
@@ -102,7 +109,7 @@ export function ErrorNotice({ error, onRetry, onOpenSettings, onDismiss }: Props
       <div className="flex-1 min-w-0">
         <p className="font-medium">{error.message}</p>
 
-        {error.kind === "auth" && (
+        {error.kind === "config" && (
           <p className="mt-1 opacity-90">
             Your key stays in this browser and is sent only to Google, never stored
             on the server.
@@ -118,7 +125,7 @@ export function ErrorNotice({ error, onRetry, onOpenSettings, onDismiss }: Props
         )}
 
         <div className="flex flex-wrap items-center gap-2 mt-2">
-          {error.kind === "auth" && onOpenSettings && (
+          {error.kind === "config" && onOpenSettings && (
             <button
               onClick={onOpenSettings}
               className="px-2.5 py-1 rounded-lg text-[12px] font-medium border transition"
@@ -127,7 +134,16 @@ export function ErrorNotice({ error, onRetry, onOpenSettings, onDismiss }: Props
               Add your key
             </button>
           )}
-          {onRetry && error.kind !== "auth" && (
+          {error.kind === "auth" && (
+            <a
+              href="/login"
+              className="px-2.5 py-1 rounded-lg text-[12px] font-medium border transition inline-block"
+              style={{ borderColor: "var(--danger-border)" }}
+            >
+              Sign in
+            </a>
+          )}
+          {onRetry && error.kind !== "auth" && error.kind !== "config" && (
             <button
               onClick={onRetry}
               disabled={error.kind === "rate_limit" && countdown > 0}

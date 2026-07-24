@@ -32,6 +32,7 @@ import {
 export default function ChatPage() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
   const [userInput, setUserInput] = useState("");
   const [geminiKey, setGeminiKey] = useState("");
   const [tenantId, setTenantId] = useState("");
@@ -279,6 +280,7 @@ export default function ChatPage() {
 
   // Rebuild the sidebar and the active transcript from the server.
   const restoreSessions = async (tenant: string) => {
+    setSessionsLoading(true);
     try {
       const res = await fetch(`${API_BASE_URL}/api/v1/chat/sessions`, {
         headers: { "X-Tenant-Id": tenant },
@@ -312,6 +314,8 @@ export default function ChatPage() {
       const fresh = makeEmptySession();
       setSessions([fresh]);
       setActiveSessionId(fresh.id);
+    } finally {
+      setSessionsLoading(false);
     }
   };
 
@@ -897,6 +901,7 @@ export default function ChatPage() {
       <SessionRail
         sessions={sessions}
         activeSessionId={activeSessionId}
+        sessionsLoading={sessionsLoading}
         geminiKey={geminiKey}
         ttsSpeed={ttsSpeed}
         settingsOpen={settingsOpen}
@@ -972,7 +977,8 @@ export default function ChatPage() {
               visitor previously had no indication of what this is good at. */}
           {showSuggestions && (
             <div className="max-w-3xl">
-              <p className="text-[12px] text-[var(--text-muted)] mb-2">Try asking:</p>
+              <p className="text-[15px] font-medium text-[var(--text)] mb-1">Ask Andrew anything</p>
+              <p className="text-[12px] text-[var(--text-muted)] mb-3">Try one of these to get started:</p>
               <div className="flex flex-wrap gap-2">
                 {SUGGESTED_QUESTIONS.map((q) => (
                   <button
@@ -1004,10 +1010,13 @@ export default function ChatPage() {
           value={userInput}
           isRecording={isRecording}
           isLoading={isLoading}
+          geminiKey={geminiKey}
+          tenantReady={!!tenantId}
           onChange={setUserInput}
           onSubmit={handleSendMessage}
           onToggleRecording={handleToggleRecording}
           onStartVoice={() => setVoiceState("listening")}
+          onOpenSettings={() => { setSettingsOpen(true); setMobilePanel("sessions"); }}
         />
       </div>
 
