@@ -424,12 +424,28 @@ async def embed_query(text: str, api_key: str = "") -> list[float]:
 
 async def embed_document(text: str, api_key: str = "") -> list[float]:
     """Embed one stored item, such as a knowledge graph entity name."""
+    vectors = await embed_document_batch([text], api_key)
+    return vectors[0]
+
+
+async def embed_document_batch(
+    texts: list[str],
+    api_key: str = "",
+) -> list[list[float]]:
+    """
+    Embed stored items in one provider request.
+
+    Runtime graph extraction often discovers several entities at once. Sending
+    one request per name can exceed providers' concurrency limits even for a
+    small turn, whereas every supported provider accepts a list of texts.
+    """
+    if not texts:
+        return []
     loop = asyncio.get_running_loop()
     executor = _get_local_pool() if EMBED_PROVIDER == "local" else None
-    vectors = await loop.run_in_executor(
-        executor, lambda: encode_sync([text], api_key, DOCUMENT)
+    return await loop.run_in_executor(
+        executor, lambda: encode_sync(texts, api_key, DOCUMENT)
     )
-    return vectors[0]
 
 
 def embed_documents(

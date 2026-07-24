@@ -38,6 +38,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 import asyncpg
+from .model_config import REWRITE_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +53,6 @@ VECTOR_WEIGHT        = float(os.getenv("RETRIEVAL_VECTOR_WEIGHT", "0.65"))
 FTS_WEIGHT           = float(os.getenv("RETRIEVAL_FTS_WEIGHT", "0.35"))
 MIN_COSINE_GROUNDED  = float(os.getenv("RETRIEVAL_MIN_COSINE", "0.35"))
 ENABLE_QUERY_REWRITE = os.getenv("ENABLE_QUERY_REWRITE", "true").lower() != "false"
-REWRITE_MODEL        = os.getenv("REWRITE_MODEL", "gemini-2.5-flash")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

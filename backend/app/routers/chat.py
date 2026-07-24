@@ -229,6 +229,32 @@ def _get_corpus_tenant_id() -> str | None:
     return raw
 
 
+def _generation_error_response(exc: BaseException) -> tuple[int, str]:
+    """Translate Gemini/upstream failures into stable, actionable API errors."""
+    detail = str(exc)
+    lowered = detail.lower()
+
+    if (
+        "429" in lowered
+        or "quota" in lowered
+        or "resource_exhausted" in lowered
+        or "rate limit" in lowered
+    ):
+        return 429, "Gemini API rate limit reached. Please wait a moment and try again."
+    if (
+        "api key not valid" in lowered
+        or "api_key_invalid" in lowered
+        or "invalid api key" in lowered
+        or "permission_denied" in lowered
+    ):
+        return 401, "Gemini rejected this API key. Check it in Settings and try again."
+    if "model" in lowered and ("not_found" in lowered or "not found" in lowered):
+        return 502, "The configured Gemini model is unavailable. The server needs an update."
+    if "503" in lowered or "unavailable" in lowered or "high demand" in lowered:
+        return 503, "Gemini is temporarily unavailable. Please try again in a moment."
+    return 502, "The AI service could not complete this request. Please try again."
+
+
 async def _fetch_account_context(conn: asyncpg.Connection, tenant_id: str) -> str | None:
     """
     The optional note a signed-in user left at signup ("what should the twin
@@ -476,6 +502,16 @@ async def _prepare_turn(
     }
 
 
+async def _ensure_tenant(db: asyncpg.Pool, tenant_id: str) -> None:
+    """Create a guest tenant before any session row can reference it."""
+    async with db.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO tenants (id, name) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+            uuid.UUID(tenant_id),
+            "Digital Twin User",
+        )
+
+
 async def _persist_turn(
     db: asyncpg.Pool,
     tenant_id: str,
@@ -524,8 +560,9 @@ async def _persist_turn(
             await conn.execute(
                 f"""
                 INSERT INTO conversation_turns
-                    (id, tenant_id, session_id, role, content, turn_index)
-                VALUES ($1, $2, $3, $4, $5, {next_index})
+                    (id, tenant_id, session_id, role, content, turn_index,
+                     triplets_extracted)
+                VALUES ($1, $2, $3, $4, $5, {next_index}, TRUE)
                 """,
                 uuid.uuid4(), ten_uuid, sess_uuid, "assistant", assistant_reply,
             )
@@ -642,11 +679,7 @@ async def chat_message(
     sess_uuid  = _coerce_session_uuid(body.session_id)
 
     # ── Step 0: Ensure tenant exists ───────────────────────────────────────
-    async with db.acquire() as conn:
-        await conn.execute(
-            "INSERT INTO tenants (id, name) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-            uuid.UUID(tenant_id), "Digital Twin User",
-        )
+    await _ensure_tenant(db, tenant_id)
 
     # ── Steps 1-3: routing, retrieval, graph memory, calibration ──────────
     ctx = await _prepare_turn(db, body, tenant_id, gemini_key)
@@ -659,14 +692,9 @@ async def chat_message(
             gemini_api_key = gemini_key,
         )
     except Exception as e:
-        err_msg = str(e)
         logger.exception("Generation failed: %s", e)
-        if "429" in err_msg or "quota" in err_msg.lower() or "rate" in err_msg.lower():
-            raise HTTPException(
-                status_code=429,
-                detail="Gemini API rate limit reached. The free tier allows ~20 requests/minute. Please wait a moment and try again.",
-            )
-        raise HTTPException(status_code=502, detail=f"Generation error: {err_msg}")
+        status, detail = _generation_error_response(e)
+        raise HTTPException(status_code=status, detail=detail)
 
     # ── Step 5: Persist ───────────────────────────────────────────────────
     await _persist_turn(db, tenant_id, sess_uuid, turn_id, body.message, assistant_reply)
@@ -721,6 +749,11 @@ async def chat_message_stream(
     tenant_id  = keys["tenant_id"]
     turn_id    = uuid.uuid4()
     sess_uuid  = _coerce_session_uuid(body.session_id)
+
+    # A guest tenant exists only in browser storage until the first message.
+    # Create it before the stream starts so persistence cannot violate the
+    # chat_sessions tenant foreign key after tokens have already been emitted.
+    await _ensure_tenant(db, tenant_id)
 
     async def event_stream():
         try:
@@ -777,10 +810,8 @@ async def chat_message_stream(
 
         except Exception as exc:  # noqa: BLE001
             logger.exception("Streaming generation failed: %s", exc)
-            detail = str(exc)
-            if "429" in detail or "quota" in detail.lower():
-                detail = "Gemini API rate limit reached. Please wait a moment and try again."
-            yield _sse("error", {"detail": detail})
+            status, detail = _generation_error_response(exc)
+            yield _sse("error", {"status": status, "detail": detail})
 
     return StreamingResponse(
         event_stream(),
@@ -1218,6 +1249,7 @@ async def graph_extraction_status(
             SELECT COUNT(*) FROM conversation_turns
             WHERE  tenant_id = $1::uuid AND session_id = $2::uuid
               AND  triplets_extracted = FALSE
+              AND  role = 'user'
             """,
             uuid.UUID(tenant_id), _coerce_session_uuid(session_id),
         )

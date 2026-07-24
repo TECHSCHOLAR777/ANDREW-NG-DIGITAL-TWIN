@@ -102,7 +102,7 @@ def _extract(passage: str, api_key: str) -> list[dict]:
 
     result = gemini_client.generate_sync(
         api_key=api_key,
-        model=os.getenv("REWRITE_MODEL", "gemini-2.5-flash"),
+        model=os.getenv("REWRITE_MODEL", "gemini-3.5-flash-lite"),
         contents=[{"role": "user", "parts": [{"text": EXTRACTION_PROMPT.replace("{passage}", passage[:6000])}]}],
         temperature=0.1,
         max_output_tokens=2048,

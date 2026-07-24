@@ -107,7 +107,7 @@ def _generate(prompt: str, api_key: str, max_tokens: int = 256) -> str:
     from app.services import gemini_client
     result = gemini_client.generate_sync(
         api_key=api_key,
-        model=os.getenv("REWRITE_MODEL", "gemini-2.5-flash"),
+        model=os.getenv("REWRITE_MODEL", "gemini-3.5-flash-lite"),
         contents=[{"role": "user", "parts": [{"text": prompt}]}],
         temperature=0.4,
         max_output_tokens=max_tokens,

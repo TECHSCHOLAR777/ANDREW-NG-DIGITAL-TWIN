@@ -37,6 +37,7 @@ from typing import Any
 
 from . import gemini_client
 from . import persona as persona_mod
+from .model_config import GENERATION_MODEL, legacy_cache_model_name
 
 logger = logging.getLogger(__name__)
 
@@ -125,9 +126,9 @@ class PromptCacheManager:
       - Conversation history
     """
 
-    # Model that supports context caching
-    # gemini-2.5-pro or gemini-2.5-flash
-    CACHE_SUPPORTED_MODEL = "models/gemini-2.5-flash"
+    # Main conversational model. google-genai receives implicit prefix
+    # caching; the legacy fallback qualifies the same id for explicit caching.
+    CACHE_SUPPORTED_MODEL = GENERATION_MODEL
 
     def __init__(self, gemini_api_key: str):
         self._api_key = gemini_api_key
@@ -216,7 +217,7 @@ class PromptCacheManager:
 
         Explicit caching has a per-model minimum token count. If the persona
         falls under it the call fails, and we degrade to uncached generation —
-        Gemini 2.5 applies implicit prefix caching automatically anyway, and
+        Current Gemini models apply implicit prefix caching automatically, and
         the prompt is ordered static-first so that still applies.
         """
         def _create() -> str:
@@ -232,7 +233,7 @@ class PromptCacheManager:
             with gemini_client.legacy_lock():
                 genai.configure(api_key=self._api_key)
                 cache = caching.CachedContent.create(
-                    model              = self.CACHE_SUPPORTED_MODEL,
+                    model              = legacy_cache_model_name(self.CACHE_SUPPORTED_MODEL),
                     system_instruction = ANDREW_NG_PERSONA,
                     ttl                = datetime.timedelta(seconds=ttl_seconds),
                     display_name       = "andrew_ng_persona",

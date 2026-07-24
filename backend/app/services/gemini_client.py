@@ -46,6 +46,8 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any
 
+from .model_config import bare_model_name
+
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -140,6 +142,59 @@ def _extract_text(response: Any) -> str:
     return ""
 
 
+def _uses_thinking_levels(model: str) -> bool:
+    """
+    Return whether a model follows the current Gemini request contract.
+
+    Gemini 3.6 Flash and Gemini 3.5 Flash-Lite replaced numeric thinking
+    budgets with thinking levels and deprecated sampling parameters.
+    """
+    name = bare_model_name(model)
+    return name.startswith("gemini-3.6-") or name.startswith("gemini-3.5-flash-lite")
+
+
+def _thinking_level_for_budget(thinking_budget: int | None) -> str | None:
+    """Map the old routing budgets onto the supported current model levels."""
+    if thinking_budget is None:
+        return None
+    return "medium" if thinking_budget >= 1536 else "low"
+
+
+def _google_config_kwargs(
+    *,
+    model: str,
+    system_instruction: str | None,
+    temperature: float,
+    max_output_tokens: int,
+    thinking_budget: int | None,
+    cached_content: str | None,
+) -> dict[str, Any]:
+    """Build a GenerateContentConfig that matches the selected model family."""
+    modern_contract = _uses_thinking_levels(model)
+    config_kwargs: dict[str, Any] = {
+        "max_output_tokens": max_output_tokens,
+    }
+    if not modern_contract:
+        config_kwargs["temperature"] = temperature
+    if system_instruction and not cached_content:
+        config_kwargs["system_instruction"] = system_instruction
+    if cached_content:
+        config_kwargs["cached_content"] = cached_content
+    if thinking_budget is not None:
+        try:
+            thinking_kwargs = (
+                {"thinking_level": _thinking_level_for_budget(thinking_budget)}
+                if modern_contract
+                else {"thinking_budget": thinking_budget}
+            )
+            config_kwargs["thinking_config"] = _genai_types.ThinkingConfig(
+                **thinking_kwargs
+            )
+        except Exception:  # noqa: BLE001 - older SDK builds omit these fields
+            pass
+    return config_kwargs
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # PUBLIC API
 # ─────────────────────────────────────────────────────────────────────────────
@@ -156,12 +211,9 @@ def generate_sync(
     """
     Blocking generation. Call via `generate()` from async code.
 
-    thinking_budget caps internal reasoning tokens separately from the visible
-    answer. On Gemini 2.5 both are drawn from the same output budget, which is
-    why an earlier attempt to fix truncated answers by raising the ceiling to
-    65536 was treating the symptom: the model was spending the budget thinking.
-    Capping thinking directly lets max_output_tokens go back to a size that
-    matches a conversational tutor reply.
+    ``thinking_budget`` remains the internal routing interface for compatibility.
+    Current models receive a mapped thinking level; older models receive the
+    numeric token budget they expect.
     """
     if _BACKEND == "none":
         raise RuntimeError(
@@ -171,21 +223,14 @@ def generate_sync(
     if _BACKEND == "google-genai":
         client = _genai_new.Client(api_key=api_key)  # per-call, no global state
 
-        config_kwargs: dict[str, Any] = {
-            "temperature": temperature,
-            "max_output_tokens": max_output_tokens,
-        }
-        if system_instruction and not cached_content:
-            config_kwargs["system_instruction"] = system_instruction
-        if cached_content:
-            config_kwargs["cached_content"] = cached_content
-        if thinking_budget is not None:
-            try:
-                config_kwargs["thinking_config"] = _genai_types.ThinkingConfig(
-                    thinking_budget=thinking_budget
-                )
-            except Exception:  # noqa: BLE001 - older builds lack ThinkingConfig
-                pass
+        config_kwargs = _google_config_kwargs(
+            model=model,
+            system_instruction=system_instruction,
+            temperature=temperature,
+            max_output_tokens=max_output_tokens,
+            thinking_budget=thinking_budget,
+            cached_content=cached_content,
+        )
 
         response = client.models.generate_content(
             model=model,
@@ -197,10 +242,12 @@ def generate_sync(
         # concurrent request cannot swap the global key in between.
         with _legacy_lock:
             _genai_legacy.configure(api_key=api_key)
-            gen_config = _genai_legacy.GenerationConfig(
-                temperature=temperature,
-                max_output_tokens=max_output_tokens,
-            )
+            generation_kwargs: dict[str, Any] = {
+                "max_output_tokens": max_output_tokens,
+            }
+            if not _uses_thinking_levels(model):
+                generation_kwargs["temperature"] = temperature
+            gen_config = _genai_legacy.GenerationConfig(**generation_kwargs)
             if cached_content:
                 from google.generativeai import caching as _caching  # type: ignore
                 handle = _caching.CachedContent.get(cached_content)
@@ -278,21 +325,14 @@ def stream_sync(
 
     if _BACKEND == "google-genai":
         client = _genai_new.Client(api_key=api_key)
-        config_kwargs: dict[str, Any] = {
-            "temperature": temperature,
-            "max_output_tokens": max_output_tokens,
-        }
-        if system_instruction and not cached_content:
-            config_kwargs["system_instruction"] = system_instruction
-        if cached_content:
-            config_kwargs["cached_content"] = cached_content
-        if thinking_budget is not None:
-            try:
-                config_kwargs["thinking_config"] = _genai_types.ThinkingConfig(
-                    thinking_budget=thinking_budget
-                )
-            except Exception:  # noqa: BLE001
-                pass
+        config_kwargs = _google_config_kwargs(
+            model=model,
+            system_instruction=system_instruction,
+            temperature=temperature,
+            max_output_tokens=max_output_tokens,
+            thinking_budget=thinking_budget,
+            cached_content=cached_content,
+        )
 
         for chunk in client.models.generate_content_stream(
             model=model,
@@ -305,10 +345,12 @@ def stream_sync(
     else:
         with _legacy_lock:
             _genai_legacy.configure(api_key=api_key)
-            gen_config = _genai_legacy.GenerationConfig(
-                temperature=temperature,
-                max_output_tokens=max_output_tokens,
-            )
+            generation_kwargs: dict[str, Any] = {
+                "max_output_tokens": max_output_tokens,
+            }
+            if not _uses_thinking_levels(model):
+                generation_kwargs["temperature"] = temperature
+            gen_config = _genai_legacy.GenerationConfig(**generation_kwargs)
             if cached_content:
                 from google.generativeai import caching as _caching  # type: ignore
                 handle = _caching.CachedContent.get(cached_content)

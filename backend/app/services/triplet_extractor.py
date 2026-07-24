@@ -20,7 +20,6 @@ Dependencies:
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
@@ -30,6 +29,7 @@ from typing import Any
 
 import asyncpg
 from . import gemini_client
+from .model_config import TRIPLET_MODEL
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -277,7 +277,7 @@ class TripletExtractor:
         self,
         db_pool: asyncpg.Pool,
         gemini_api_key: str,
-        gemini_model: str = "gemini-2.5-flash",  # flash = fast + cheap
+        gemini_model: str = TRIPLET_MODEL,
     ):
         self.db = db_pool
         self.model_name = gemini_model
@@ -517,8 +517,9 @@ class TripletExtractor:
             logger.info("Computing embeddings upfront for %d missing entities", len(missing_names))
             # Entity names are stored items, not queries, so they use the
             # document task type to match how corpus chunks were embedded.
-            embeddings_list = await asyncio.gather(
-                *[embeddings.embed_document(name, self._api_key) for name in missing_names]
+            embeddings_list = await embeddings.embed_document_batch(
+                missing_names,
+                self._api_key,
             )
             for name, emb in zip(missing_names, embeddings_list):
                 existing_embeddings[name] = emb
