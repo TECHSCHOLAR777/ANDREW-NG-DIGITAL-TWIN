@@ -413,6 +413,7 @@ class PromptCacheManager:
 
         return result.text, status
 
+    @staticmethod
     def _dedupe_consecutive_roles(messages: list[dict]) -> list[dict]:
         """
         Gemini rejects conversations with consecutive messages of the same role.
