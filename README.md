@@ -12,7 +12,7 @@ When you interact with the digital twin:
 3. **Dual-Scope Memory:**
    - **Cross-Session Recall:** A recursive 2-hop CTE database query retrieves the student's global learning state across all chat history associated with the `X-Tenant-Id`.
    - **Session-Scoped Visual Graph:** The interactive graph displays only the triplets discovered or updated in the current active chat session.
-4. **Context Caching:** It utilizes Gemini's context caching API (`CachedContent`) to cache the static corpus chunks and Andrew's massive persona instructions, reducing API costs and latency.
+4. **Context Caching:** The static persona is placed first so current Gemini models can apply implicit prefix caching. Retrieved corpus passages stay fresh for every turn instead of being frozen into a stale session cache.
 5. **Background Triplet Extraction:** After sending a response, FastAPI spawns a non-blocking background task. A specialized Gemini call parses the turn to extract subject-predicate-object (SPO) triplets (e.g. `(Student, struggles_with, Gradient Descent)`).
 6. **Entity Resolution:** The backend runs trigram fuzzy matching to resolve synonyms or abbreviations (e.g., merging "backprop" into "Backpropagation") before persisting nodes.
 7. **Voice Interaction:** The system supports hands-free audio. The UI uses the browser's Web Speech API for voice-to-text, and synthesizes audio via either a local cloned-voice server (Chatterbox on port 5002) or native browser text-to-speech.
@@ -108,7 +108,11 @@ ENVIRONMENT=development
 CHATTERBOX_URL=http://127.0.0.1:5002/v1/audio/speech
 
 # Retrieval tuning (all optional, shown with their defaults)
-EMBED_MODEL=all-mpnet-base-v2
+EMBED_PROVIDER=jina
+JINA_API_KEY=                    # required by the default provider
+JINA_EMBED_MODEL=jina-embeddings-v3
+EMBED_DIMS=1024
+EMBED_MODEL=all-mpnet-base-v2    # used only with EMBED_PROVIDER=local
 EMBED_WORKERS=2
 RETRIEVAL_NEIGHBOR_WINDOW=1      # chunks pulled either side of each hit
 RETRIEVAL_RRF_K=60
@@ -116,6 +120,8 @@ RETRIEVAL_VECTOR_WEIGHT=0.65
 RETRIEVAL_FTS_WEIGHT=0.35
 RETRIEVAL_MIN_COSINE=0.35        # below this the answer is flagged ungrounded
 ENABLE_QUERY_REWRITE=true        # rewrite follow-ups into standalone questions
+GEMINI_MODEL=gemini-3.6-flash    # main conversational model
+GEMINI_UTILITY_MODEL=gemini-3.5-flash-lite
 MAX_CACHE_MANAGERS=128           # bound on cached per-key prompt managers
 ```
 
@@ -129,24 +135,10 @@ MAX_CACHE_MANAGERS=128           # bound on cached per-key prompt managers
 > `CORPUS_TENANT_ID` is optional. If omitted, retrieval treats `knowledge_chunks` as a shared corpus and searches all ingested chunks while keeping user memory tenant-scoped.
 
 ### Database Migrations
-Run these scripts sequentially in your Supabase SQL editor or direct database interface:
-1. `backend/migrations/001_knowledge_graph_schema.sql`
-2. `backend/migrations/002_entity_resolution_and_traversal.sql`
-3. `backend/migrations/003_hybrid_retrieval_rrf.sql`
-4. `backend/migrations/004_production_hardening.sql`
-5. `backend/migrations/005_session_scoped_relations.sql`
-6. `backend/migrations/006_shared_corpus_retrieval.sql`
-7. `backend/migrations/007_bidirectional_traversal.sql`
-8. `backend/migrations/008_retrieval_quality.sql`
-9. `backend/migrations/009_temporal_graph.sql`
-10. `backend/migrations/010_session_persistence.sql`
-11. `backend/migrations/011_tenant_isolation.sql`
-12. `backend/migrations/012_curriculum_graph.sql`
-
-> [!TIP]
-> Rather than pasting these by hand, run `python scripts/migrate.py`. It applies
-> anything outstanding in order, records what ran in a `schema_migrations` table,
-> and supports `--status` and `--dry-run`.
+The ordered SQL files in `backend/migrations/` are the database history. Run
+`python scripts/migrate.py`; it applies only outstanding files in order, records
+their checksums in `schema_migrations`, and supports `--status` and `--dry-run`.
+Do not edit a migration after it has been applied—add the next numbered file.
 
 > [!IMPORTANT]
 > Migration 008 replaces the IVFFlat vector indexes with HNSW. The originals were
