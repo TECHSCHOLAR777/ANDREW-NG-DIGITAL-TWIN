@@ -54,7 +54,8 @@ export function SessionRail({
   onDeleteChat: (id: string, e: React.MouseEvent) => void
 }) {
   return (
-    <div
+    <aside
+      aria-label="Conversations"
       className={`${mobileVisible ? "flex" : "hidden"} lg:flex
         absolute lg:relative inset-2 lg:inset-auto z-30 lg:z-auto
         w-auto lg:w-[264px] lg:flex-shrink-0
@@ -232,6 +233,6 @@ export function SessionRail({
           })
         )}
       </div>
-    </div>
+    </aside>
   )
 }

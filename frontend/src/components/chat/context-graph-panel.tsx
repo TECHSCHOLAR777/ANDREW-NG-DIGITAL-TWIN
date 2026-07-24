@@ -36,7 +36,8 @@ export function ContextGraphPanel({
   onForgetEdge: (edgeId: string) => void
 }) {
   return (
-    <div
+    <aside
+      aria-label="Context graph"
       className={`${mobileVisible ? "flex" : "hidden"} lg:flex
         absolute lg:relative inset-2 lg:inset-auto z-30 lg:z-auto
         w-auto lg:w-[340px] xl:w-[360px] lg:flex-shrink-0
@@ -92,6 +93,6 @@ export function ContextGraphPanel({
           onForgetEdge={onForgetEdge}
         />
       </div>
-    </div>
+    </aside>
   )
 }

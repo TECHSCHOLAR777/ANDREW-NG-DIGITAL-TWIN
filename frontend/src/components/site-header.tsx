@@ -31,6 +31,7 @@ export function SiteHeader() {
   const authed = status === "authenticated"
   const [scrolled, setScrolled] = React.useState(false)
   const [menuOpen, setMenuOpen] = React.useState(false)
+  const firstMenuLinkRef = React.useRef<HTMLAnchorElement>(null)
 
   React.useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 8)
@@ -39,9 +40,10 @@ export function SiteHeader() {
     return () => window.removeEventListener("scroll", onScroll)
   }, [])
 
-  // Escape closes the mobile menu.
+  // Escape closes the mobile menu; opening it moves focus to the first link.
   React.useEffect(() => {
     if (!menuOpen) return
+    firstMenuLinkRef.current?.focus()
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setMenuOpen(false)
     }
@@ -71,7 +73,7 @@ export function SiteHeader() {
         </Link>
 
         {/* Desktop nav */}
-        <nav className="hidden items-center gap-1 sm:flex">
+        <nav aria-label="Main navigation" className="hidden items-center gap-1 sm:flex">
           {TABS.map((tab) => {
             const active = pathname === tab.href
             return (
@@ -139,12 +141,13 @@ export function SiteHeader() {
           id="mobile-menu"
           className="mx-auto mt-2 w-[min(1100px,calc(100%-2rem))] rounded-2xl border border-[var(--border)] bg-[var(--surface-glass)] p-2 shadow-[0_8px_30px_-12px_var(--glass-shadow)] backdrop-blur-xl sm:hidden"
         >
-          <nav className="flex flex-col gap-1">
-            {TABS.map((tab) => {
+          <nav aria-label="Mobile navigation" className="flex flex-col gap-1">
+            {TABS.map((tab, i) => {
               const active = pathname === tab.href
               return (
                 <Link
                   key={tab.href}
+                  ref={i === 0 ? firstMenuLinkRef : undefined}
                   href={tab.href}
                   aria-current={active ? "page" : undefined}
                   onClick={() => setMenuOpen(false)}

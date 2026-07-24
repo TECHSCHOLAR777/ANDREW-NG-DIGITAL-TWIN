@@ -193,17 +193,21 @@ export function VoiceOverlay({
         <div className="flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-2">
           <button
             onClick={onSpeedDown}
-            aria-label="Slower"
+            aria-label={`Decrease speed (currently ${ttsSpeed.toFixed(1)}x)`}
             className="px-1 text-sm font-bold text-[var(--text-muted)] hover:text-[var(--text)]"
           >
             -
           </button>
-          <span className="min-w-[34px] text-center text-[12px] font-medium text-[var(--brand)]">
+          <span
+            aria-live="polite"
+            aria-label={`Speech speed ${ttsSpeed.toFixed(1)}x`}
+            className="min-w-[34px] text-center text-[12px] font-medium text-[var(--brand)]"
+          >
             {ttsSpeed.toFixed(1)}x
           </span>
           <button
             onClick={onSpeedUp}
-            aria-label="Faster"
+            aria-label={`Increase speed (currently ${ttsSpeed.toFixed(1)}x)`}
             className="px-1 text-sm font-bold text-[var(--text-muted)] hover:text-[var(--text)]"
           >
             +

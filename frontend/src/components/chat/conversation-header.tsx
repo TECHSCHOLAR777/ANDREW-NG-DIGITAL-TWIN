@@ -22,7 +22,7 @@ export function ConversationHeader({
   onToggleReadAloud: () => void
 }) {
   return (
-    <div className="h-16 border-b border-[var(--border)] px-3 sm:px-6 flex items-center justify-between bg-[var(--surface)]">
+    <header className="h-16 border-b border-[var(--border)] px-3 sm:px-6 flex items-center justify-between bg-[var(--surface)]" aria-label="Conversation toolbar">
       <div className="flex items-center gap-2 sm:gap-3 min-w-0">
         <button
           onClick={onOpenSessions}
@@ -69,6 +69,6 @@ export function ConversationHeader({
           <Volume2 className="w-4 h-4" />
         </button>
       </div>
-    </div>
+    </header>
   )
 }

@@ -59,7 +59,7 @@ export function Composer({
 
   return (
     <div className="p-3 sm:p-6 border-t border-[var(--border)]">
-      <form onSubmit={onSubmit} className="flex items-end gap-3">
+      <form onSubmit={onSubmit} aria-label="Send a message" className="flex items-end gap-3">
         <div className="relative flex-1">
           <textarea
             ref={textareaRef}
@@ -130,7 +130,7 @@ export function Composer({
           to start.
         </p>
       ) : (
-        <p className="mt-2 text-[11px] text-[var(--text-subtle)]">
+        <p className="mt-2 text-[11px] text-[var(--text-muted)]">
           Enter to send, Shift + Enter for a new line.
         </p>
       )}

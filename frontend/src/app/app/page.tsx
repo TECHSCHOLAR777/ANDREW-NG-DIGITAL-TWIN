@@ -926,7 +926,7 @@ export default function ChatPage() {
       {/* ──────────────────────────────────────────────────
           2. CENTRAL PANEL (Chat bubbles window)
           ────────────────────────────────────────────────── */}
-      <div className="flex-1 min-w-0 bg-[var(--surface)] border border-[var(--border)] rounded-2xl shadow-sm flex flex-col overflow-hidden">
+      <main id="main-content" className="flex-1 min-w-0 bg-[var(--surface)] border border-[var(--border)] rounded-2xl shadow-sm flex flex-col overflow-hidden">
         
         <ConversationHeader
           onOpenSessions={() => setMobilePanel("sessions")}
@@ -1018,7 +1018,7 @@ export default function ChatPage() {
           onStartVoice={() => setVoiceState("listening")}
           onOpenSettings={() => { setSettingsOpen(true); setMobilePanel("sessions"); }}
         />
-      </div>
+      </main>
 
       {/* ──────────────────────────────────────────────────
           3. CONTEXT GRAPH (Right panel)
