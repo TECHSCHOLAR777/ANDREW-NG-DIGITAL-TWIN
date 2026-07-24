@@ -91,41 +91,42 @@ export interface KnowledgeGraph {
 // ── Visual style config ───────────────────────────────────────────────────────
 
 /**
- * Fallback node colours for the built-in React Flow renderer.
- *
- * The general-context types added in migration 015 default to neutral grey so
- * a new backend type never renders untyped. The Context Graph redesign moves
- * the whole graph to a mostly-monochrome graphite/white language with orange
- * reserved for active/selected paths; the original five keep their current
- * colours only until that redesign lands. Kept exhaustive over NodeType.
+ * The Context Graph is mostly monochrome: every node type resolves to the same
+ * graphite token, and categories are told apart by their label and icon rather
+ * than colour. Orange is reserved for the selected node and active paths, and
+ * is applied in the view rather than baked in here. Token-driven so both themes
+ * work. Kept exhaustive over NodeType.
  */
 export const NODE_TYPE_COLORS: Record<NodeType, string> = {
-  Student:      "#1A56DB",   // Royal Blue
-  Concept:      "#F59E0B",   // Amber
-  Project:      "#8B5CF6",   // Purple
-  Tool:         "#10B981",   // Green
-  Paper:        "#6366F1",   // Indigo
-  Person:       "#6B7280",   // Neutral grey (general context)
-  Organization: "#6B7280",
-  Industry:     "#6B7280",
-  Goal:         "#6B7280",
-  Preference:   "#6B7280",
-  ResearchArea: "#6B7280",
+  Student:      "var(--graph-node)",
+  Concept:      "var(--graph-node)",
+  Project:      "var(--graph-node)",
+  Tool:         "var(--graph-node)",
+  Paper:        "var(--graph-node)",
+  Person:       "var(--graph-node)",
+  Organization: "var(--graph-node)",
+  Industry:     "var(--graph-node)",
+  Goal:         "var(--graph-node)",
+  Preference:   "var(--graph-node)",
+  ResearchArea: "var(--graph-node)",
 };
 
-/** Edge color per predicate type. */
+/**
+ * Edges are monochrome as well. The predicate is carried by its label, not by a
+ * rainbow of colours, so every edge uses the same graphite edge token.
+ */
 export const PREDICATE_COLORS: Record<string, string> = {
-  struggles_with:   "#EF4444",   // Red
-  mastered:         "#10B981",   // Green
-  curious_about:    "#F59E0B",   // Amber
-  works_in:         "#8B5CF6",   // Purple
-  studied:          "#6366F1",   // Indigo
-  applied:          "#3B82F6",   // Blue
-  confused_about:   "#F97316",   // Orange
-  wants_to_learn:   "#06B6D4",   // Cyan
-  has_prerequisite: "#9CA3AF",   // Muted Gray
-  related_to:       "#D1D5DB",   // Gray
-  used_in:          "#A78BFA",   // Violet
-  named:            "#14B8A6",   // Teal
-  is:               "#64748B",   // Slate
+  struggles_with:   "var(--graph-edge)",
+  mastered:         "var(--graph-edge)",
+  curious_about:    "var(--graph-edge)",
+  works_in:         "var(--graph-edge)",
+  studied:          "var(--graph-edge)",
+  applied:          "var(--graph-edge)",
+  confused_about:   "var(--graph-edge)",
+  wants_to_learn:   "var(--graph-edge)",
+  has_prerequisite: "var(--graph-edge)",
+  related_to:       "var(--graph-edge)",
+  used_in:          "var(--graph-edge)",
+  named:            "var(--graph-edge)",
+  is:               "var(--graph-edge)",
 };

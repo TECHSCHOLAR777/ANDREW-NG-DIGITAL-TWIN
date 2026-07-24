@@ -1,31 +1,19 @@
 // components/KnowledgeGraphView.tsx
 /* eslint-disable react-hooks/set-state-in-effect */
-// This mirrors app/page.tsx: several effects here synchronise React state from
-// changing props (triplets/edges → derived React Flow graph). That is a
-// legitimate props-to-derived-state sync, and the file is slated for a full
-// rebuild in the Context Graph redesign phase.
+// The Context Graph.
 // ─────────────────────────────────────────────────────────────────────────────
-// React Flow knowledge graph visualizer.
-//
-// Features:
-//   • Custom circular nodes with color coding by type
-//   • Animated "struggles_with" edges
-//   • Live update support (merges new data without full re-layout)
-//   • Minimap, controls, and pan/zoom
-//   • Node click → shows evidence tooltip
-//   • Legend panel
-//
-// Usage:
-//   <KnowledgeGraphView
-//     triplets={tripletRows}
-//     edges={edgeRows}
-//     isLoading={false}
-//   />
+// A mostly-monochrome, actionable view of the context the twin has retained.
+// Nodes and edges are graphite; orange is reserved for the selected node and
+// its connected paths. Categories are told apart by their label, not colour.
+// Every retained relationship is inspectable, has its evidence, and can be
+// forgotten. A list view mirrors the same facts and controls for keyboard and
+// screen-reader users, and an equivalent-information layout replaces the old
+// rainbow legend and the 8-9px labels.
 // ─────────────────────────────────────────────────────────────────────────────
 
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ReactFlow,
   Background,
@@ -40,345 +28,219 @@ import {
   BackgroundVariant,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { List, Network, RotateCcw, Sparkles, Trash2, X } from "lucide-react";
 
-import {
-  mapTripletRowsToReactFlow,
-  mergeGraphUpdate,
-} from "../lib/graphMapper";
+import { mapTripletRowsToReactFlow, mergeGraphUpdate } from "../lib/graphMapper";
 import type {
   TripletRow,
   EdgeRow,
   KnowledgeNode,
   KnowledgeEdge,
 } from "../types/graph";
-import { NODE_TYPE_COLORS, PREDICATE_COLORS } from "../types/graph";
+
+// A signed-in user's self node arrives typed "Student"; the product shows it
+// as a person, not a learner.
+function displayCategory(nodeType: string): string {
+  return nodeType === "Student" ? "Person" : nodeType;
+}
+
+// Confidence in plain language, never a percentage.
+function confidenceLabel(score: number): string {
+  if (score >= 0.66) return "Strong";
+  if (score >= 0.33) return "Developing";
+  return "Newly noted";
+}
+
+function usePrefersReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    setReduced(mq.matches);
+    const on = () => setReduced(mq.matches);
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
+  return reduced;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CUSTOM NODE COMPONENT
+// CUSTOM NODE — monochrome, label-first, no score/hop clutter on the face
 // ─────────────────────────────────────────────────────────────────────────────
-
-const KnowledgeNodeComponent: React.FC<NodeProps<KnowledgeNode>> = ({
-  data,
-  selected,
-}) => {
-  const color = NODE_TYPE_COLORS[data.nodeType] ?? "#64748b";
-
+const KnowledgeNodeComponent: React.FC<NodeProps<KnowledgeNode>> = ({ data, selected }) => {
+  const isAnchor = data.hopDistance === 0;
   return (
     <div
       style={{
-        width:           160,
-        height:          80,
-        borderRadius:    "8px",
-        background:      "var(--surface)",
-        borderTop:       selected ? "1.5px solid var(--brand)" : "1px solid var(--border)",
-        borderRight:     selected ? "1.5px solid var(--brand)" : "1px solid var(--border)",
-        borderBottom:    selected ? "1.5px solid var(--brand)" : "1px solid var(--border)",
-        borderLeft:      `6px solid ${color}`,
-        boxShadow:       data.hopDistance === 0
-          ? `0 4px 12px rgba(0,0,0,0.06), 0 0 10px ${color}22`
-          : selected
-          ? `0 0 0 2px ${color}22, 0 4px 10px rgba(0,0,0,0.08)`
-          : "0 2px 6px rgba(0,0,0,0.04)",
-        display:         "flex",
-        flexDirection:   "column",
-        justifyContent:  "space-between",
-        padding:         "8px 10px",
-        cursor:          "pointer",
-        transition:      "box-shadow 0.2s ease, border-color 0.2s ease",
-        position:        "relative",
-        boxSizing:       "border-box",
+        width: 168,
+        minHeight: 60,
+        borderRadius: 12,
+        background: "var(--surface)",
+        border: selected
+          ? "1.5px solid var(--brand)"
+          : isAnchor
+            ? "1.5px solid var(--graph-node-anchor)"
+            : "1px solid var(--border)",
+        boxShadow: selected
+          ? "0 0 0 3px var(--brand-soft), 0 4px 12px rgba(0,0,0,0.10)"
+          : "0 2px 6px rgba(0,0,0,0.06)",
+        display: "flex",
+        flexDirection: "column",
+        gap: 4,
+        padding: "10px 12px",
+        cursor: "pointer",
+        transition: "box-shadow 0.2s ease, border-color 0.2s ease",
+        boxSizing: "border-box",
       }}
     >
-      {/* React Flow handles (invisible, for edge routing) */}
-      <Handle type="target" position={Position.Top}    style={{ opacity: 0 }} />
+      <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
       <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
 
-      {/* Top Header Row */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
-        <span
-          style={{
-            fontSize:       8,
-            fontWeight:     600,
-            color:          "var(--text-subtle)",
-            textTransform:  "uppercase",
-            letterSpacing:  "0.05em",
-          }}
-        >
-          {data.nodeType}
-        </span>
-        <span
-          style={{
-            fontSize:       9,
-            fontWeight:     700,
-            color:          color,
-            background:     `${color}12`,
-            padding:        "1px 4px",
-            borderRadius:   "4px",
-          }}
-        >
-          {(data.combinedScore * 100).toFixed(0)}%
-        </span>
-      </div>
-
-      {/* Node label */}
-      <div
+      <span
         style={{
-          fontSize:    12,
-          fontWeight:  600,
-          color:       "var(--text)",
-          textAlign:   "left",
-          lineHeight:  1.25,
-          width:       "100%",
-          overflow:    "hidden",
+          fontSize: 11,
+          fontWeight: 600,
+          color: selected ? "var(--brand)" : "var(--text-subtle)",
+          letterSpacing: "0.04em",
+        }}
+      >
+        {displayCategory(data.nodeType)}
+      </span>
+      <span
+        style={{
+          fontSize: 13,
+          fontWeight: 600,
+          color: "var(--text)",
+          lineHeight: 1.3,
+          overflow: "hidden",
           textOverflow: "ellipsis",
-          display:     "-webkit-box",
+          display: "-webkit-box",
           WebkitLineClamp: 2,
           WebkitBoxOrient: "vertical",
         }}
       >
         {data.label}
-      </div>
-
-      {/* Bottom Footer Row */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
-        <span style={{ fontSize: 9, color: "var(--text-subtle)" }}>
-          Hop {data.hopDistance}
-        </span>
-
-        {/* Hop distance indicator (ring/dot for anchor nodes) */}
-        {data.hopDistance === 0 && (
-          <div style={{ display: "flex", alignItems: "center", gap: "3px" }}>
-            <span style={{ fontSize: 8, fontWeight: 700, color: "#10B981", textTransform: "uppercase" }}>
-              Anchor
-            </span>
-            <span style={{ position: "relative", display: "flex", height: "6px", width: "6px" }}>
-              <span style={{
-                position: "absolute",
-                display: "inline-flex",
-                height: "100%",
-                width: "100%",
-                borderRadius: "50%",
-                backgroundColor: "#10B981",
-                opacity: 0.75,
-                animation: "ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite"
-              }} />
-              <span style={{
-                position: "relative",
-                display: "inline-flex",
-                borderRadius: "50%",
-                height: "6px",
-                width: "6px",
-                backgroundColor: "#10B981"
-              }} />
-            </span>
-          </div>
-        )}
-      </div>
+      </span>
     </div>
   );
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// LEGEND COMPONENT
+// NODE INSPECTOR — plain confidence, evidence, ask, and forget
 // ─────────────────────────────────────────────────────────────────────────────
-
-const GraphLegend: React.FC = () => (
-  <div
-    style={{
-      background:   "var(--surface)",
-      border:       "1px solid var(--border)",
-      borderRadius: 12,
-      padding:      "12px 16px",
-      boxShadow:    "0 1px 3px rgba(0,0,0,0.05)",
-    }}
-  >
-    <p style={{ color: "var(--text-muted)", fontSize: 11, fontWeight: 500,
-                letterSpacing: "0.07em", textTransform: "none",
-                marginBottom: 8 }}>
-      Node types
-    </p>
-    {Object.entries(NODE_TYPE_COLORS).map(([type, color]) => (
-      <div key={type} style={{ display: "flex", alignItems: "center",
-                               gap: 8, marginBottom: 4 }}>
-        <div style={{ width: 12, height: 12, borderRadius: "50%",
-                      background: color, flexShrink: 0 }} />
-        <span style={{ color: "var(--text)", fontSize: 10 }}>{type}</span>
-      </div>
-    ))}
-    <p style={{ color: "var(--text-muted)", fontSize: 11, fontWeight: 500,
-                letterSpacing: "0.07em", textTransform: "none",
-                margin: "12px 0 8px" }}>
-      Edge types
-    </p>
-    {Object.entries(PREDICATE_COLORS).slice(0, 5).map(([pred, color]) => (
-      <div key={pred} style={{ display: "flex", alignItems: "center",
-                               gap: 8, marginBottom: 4 }}>
-        <div style={{ width: 20, height: 2, background: color, flexShrink: 0 }} />
-        <span style={{ color: "var(--text)", fontSize: 10 }}>
-          {pred.replace(/_/g, " ")}
-        </span>
-      </div>
-    ))}
-  </div>
-);
-
-// ─────────────────────────────────────────────────────────────────────────────
-// NODE DETAIL PANEL
-// ─────────────────────────────────────────────────────────────────────────────
-
-interface NodeDetailProps {
-  node:      KnowledgeNode | null;
-  allEdges:  KnowledgeEdge[];
-  allNodes:  KnowledgeNode[];
-  onClose:   () => void;
-  onExplore?:(label: string) => void;
+interface InspectorProps {
+  node: KnowledgeNode;
+  allEdges: KnowledgeEdge[];
+  allNodes: KnowledgeNode[];
+  onClose: () => void;
+  onExplore?: (label: string) => void;
+  onForgetEdge?: (edgeId: string) => void;
 }
 
-const NodeDetailPanel: React.FC<NodeDetailProps> = ({ node, allEdges, allNodes, onClose, onExplore }) => {
-  if (!node) return null;
-  const color = NODE_TYPE_COLORS[node.data.nodeType] ?? "#64748b";
-
-  const metadataEntries = Object.entries(node.data.metadata || {}).filter((entry) => {
-    const val = entry[1];
-    return val !== null && val !== undefined && val !== "" && (typeof val !== "object" || Object.keys(val).length > 0);
-  });
-
+const NodeInspector: React.FC<InspectorProps> = ({
+  node,
+  allEdges,
+  allNodes,
+  onClose,
+  onExplore,
+  onForgetEdge,
+}) => {
   const connections = allEdges.filter(
-    (edge) => edge.source === node.id || edge.target === node.id
+    (e) => e.source === node.id || e.target === node.id
   );
 
   return (
     <div
+      role="dialog"
+      aria-label={`Details for ${node.data.label}`}
       style={{
-        background:    "var(--surface)",
-        border:        `1px solid var(--border)`,
-        borderRadius:  12,
-        padding:       "16px 20px",
-        minWidth:      240,
-        maxWidth:      300,
-        boxShadow:     `0 4px 16px rgba(0,0,0,0.06)`,
+        background: "var(--surface)",
+        border: "1px solid var(--border)",
+        borderRadius: 14,
+        padding: "16px 18px",
+        minWidth: 250,
+        maxWidth: 300,
+        boxShadow: "0 8px 30px -12px rgba(0,0,0,0.35)",
       }}
     >
-      <div style={{ display: "flex", justifyContent: "space-between",
-                    alignItems: "flex-start", marginBottom: 12 }}>
-        <div>
-          <p style={{ color: "var(--text)", fontWeight: 600, fontSize: 14,
-                      marginBottom: 4, lineHeight: 1.2 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12, gap: 8 }}>
+        <div style={{ minWidth: 0 }}>
+          <p style={{ color: "var(--text)", fontWeight: 600, fontSize: 15, lineHeight: 1.25, margin: 0 }}>
             {node.data.label}
           </p>
-          <span style={{ background: color, color: "#fff", borderRadius: 4,
-                         padding: "1px 6px", fontSize: 9, fontWeight: 500,
-                         textTransform: "uppercase" }}>
-            {node.data.nodeType}
+          <span style={{ color: "var(--text-muted)", fontSize: 12 }}>
+            {displayCategory(node.data.nodeType)} · {confidenceLabel(node.data.combinedScore)}
           </span>
         </div>
         <button
           onClick={onClose}
-          style={{ background: "none", border: "none", color: "var(--text-subtle)",
-                   cursor: "pointer", fontSize: 20, padding: 0, lineHeight: 1 }}
+          aria-label="Close details"
+          style={{ background: "none", border: "none", color: "var(--text-subtle)", cursor: "pointer", padding: 2, lineHeight: 0 }}
         >
-          ×
+          <X size={16} />
         </button>
       </div>
 
-      {/* Relevance Score */}
-      <div style={{ marginBottom: 12 }}>
-        <p style={{ color: "var(--text-muted)", fontSize: 10, fontWeight: 500,
-                    letterSpacing: "0.05em", textTransform: "uppercase", marginBottom: 4 }}>
-          Relevance score
-        </p>
-        <div style={{ background: "var(--surface-alt)", borderRadius: 4, height: 6 }}>
-          <div style={{
-            width:        `${Math.round(node.data.combinedScore * 100)}%`,
-            height:       "100%",
-            background:   color,
-            borderRadius: 4,
-            transition:   "width 0.5s ease",
-          }} />
-        </div>
-        <p style={{ color: "var(--text-subtle)", fontSize: 10, marginTop: 4 }}>
-          {(node.data.combinedScore * 100).toFixed(0)}% · Hop {node.data.hopDistance}
-        </p>
-      </div>
-
-      {/* Dynamic Metadata / Properties */}
-      {metadataEntries.length > 0 && (
-        <div style={{ marginBottom: 12 }}>
-          <p style={{ color: "var(--text-muted)", fontSize: 10, fontWeight: 500,
-                      letterSpacing: "0.05em", textTransform: "uppercase", marginBottom: 6 }}>
-            Properties
-          </p>
-          <div style={{ background: "var(--surface-alt)", borderRadius: 8, border: "1px solid var(--border)", padding: "6px 8px" }}>
-            {metadataEntries.map(([key, val]) => (
-              <div key={key} style={{ display: "flex", justifyContent: "space-between", fontSize: 10, margin: "4px 0" }}>
-                <span style={{ color: "var(--text-muted)", fontWeight: 500, textTransform: "capitalize" }}>{key.replace(/_/g, " ")}</span>
-                <span style={{ color: "var(--text)", textAlign: "right", fontWeight: 500 }}>
-                  {typeof val === "object" ? JSON.stringify(val) : String(val)}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* True Connections Section */}
-      <div style={{ marginBottom: 4 }}>
-        <p style={{ color: "var(--text-muted)", fontSize: 10, fontWeight: 500,
-                    letterSpacing: "0.05em", textTransform: "uppercase", marginBottom: 6 }}>
-          Connections ({connections.length})
-        </p>
-        {connections.length > 0 ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 180, overflowY: "auto" }}>
-            {connections.map((edge) => {
-              const isOutbound = edge.source === node.id;
-              const partnerId = isOutbound ? edge.target : edge.source;
-              const partnerNode = allNodes.find((n) => n.id === partnerId);
-              const partnerLabel = partnerNode?.data?.label || partnerId;
-              const partnerColor = partnerNode ? (NODE_TYPE_COLORS[partnerNode.data.nodeType] ?? "#64748b") : "#64748b";
-              const predicate = edge.data?.predicate ?? "related_to";
-              const predicateColor = PREDICATE_COLORS[predicate] ?? "var(--text-muted)";
-
-              return (
-                <div
-                  key={edge.id}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    background: "var(--surface-alt)",
-                    border: "1px solid var(--border)",
-                    borderRadius: 6,
-                    padding: "6px 8px",
-                    fontSize: 10,
-                    lineHeight: 1.3,
-                  }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", width: "100%" }}>
-                    {isOutbound ? (
-                      <>
-                        <span style={{ color: "var(--text-subtle)" }}>→</span>
-                        <span style={{ fontWeight: 600, color: predicateColor }}>
-                          {String(edge.label || predicate).replace(/_/g, " ")}
-                        </span>
-                        <span style={{ color: partnerColor, fontWeight: 600 }}>{partnerLabel}</span>
-                      </>
-                    ) : (
-                      <>
-                        <span style={{ color: partnerColor, fontWeight: 600 }}>{partnerLabel}</span>
-                        <span style={{ fontWeight: 600, color: predicateColor }}>
-                          {String(edge.label || predicate).replace(/_/g, " ")}
-                        </span>
-                        <span style={{ color: "var(--text-subtle)" }}>→</span>
-                      </>
-                    )}
-                  </div>
+      <p style={{ color: "var(--text-muted)", fontSize: 11, fontWeight: 500, letterSpacing: "0.05em", textTransform: "uppercase", margin: "0 0 6px" }}>
+        Connections ({connections.length})
+      </p>
+      {connections.length > 0 ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 220, overflowY: "auto" }}>
+          {connections.map((edge) => {
+            const isOutbound = edge.source === node.id;
+            const partnerId = isOutbound ? edge.target : edge.source;
+            const partner = allNodes.find((n) => n.id === partnerId);
+            const partnerLabel = partner?.data?.label || partnerId;
+            const predicate = String(edge.data?.predicate ?? "related_to").replace(/_/g, " ");
+            const evidence = edge.data?.evidence as string | undefined;
+            return (
+              <div
+                key={edge.id}
+                style={{
+                  background: "var(--surface-alt)",
+                  border: "1px solid var(--border)",
+                  borderRadius: 8,
+                  padding: "8px 10px",
+                  fontSize: 12,
+                }}
+              >
+                <div style={{ color: "var(--text)", lineHeight: 1.4 }}>
+                  <span style={{ color: "var(--text-muted)" }}>{isOutbound ? predicate : `${predicate} (from)`} </span>
+                  <span style={{ fontWeight: 600 }}>{partnerLabel}</span>
                 </div>
-              );
-            })}
-          </div>
-        ) : (
-          <p style={{ color: "var(--text-subtle)", fontSize: 10, fontStyle: "italic" }}>No active connections in graph view.</p>
-        )}
-      </div>
+                {evidence && (
+                  <p style={{ color: "var(--text-subtle)", fontStyle: "italic", margin: "4px 0 0", lineHeight: 1.4 }}>
+                    &ldquo;{evidence.slice(0, 120)}{evidence.length > 120 ? "…" : ""}&rdquo;
+                  </p>
+                )}
+                {onForgetEdge && (
+                  <button
+                    onClick={() => onForgetEdge(edge.id)}
+                    style={{
+                      marginTop: 6,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 4,
+                      background: "none",
+                      border: "1px solid var(--border)",
+                      borderRadius: 6,
+                      color: "var(--text-muted)",
+                      fontSize: 11,
+                      padding: "3px 8px",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <Trash2 size={12} /> Forget this
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <p style={{ color: "var(--text-subtle)", fontSize: 12, fontStyle: "italic", margin: 0 }}>
+          No connections in view.
+        </p>
+      )}
 
       {onExplore && (
         <button
@@ -389,43 +251,34 @@ const NodeDetailPanel: React.FC<NodeDetailProps> = ({ node, allEdges, allNodes, 
           style={{
             width: "100%",
             marginTop: 14,
-            padding: "8px 12px",
+            padding: "9px 12px",
             background: "var(--brand)",
-            border: "1px solid var(--brand)",
-            borderRadius: 8,
-            color: "var(--surface)",
-            fontSize: 12,
+            border: "none",
+            borderRadius: 9,
+            color: "var(--brand-text)",
+            fontSize: 13,
             fontWeight: 500,
             cursor: "pointer",
-            transition: "all 0.2s ease",
-            textAlign: "center",
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = "var(--brand)E0";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "var(--brand)";
           }}
         >
-          Ask Andrew about this concept
+          Ask about this
         </button>
       )}
     </div>
   );
 };
 
-
 // ─────────────────────────────────────────────────────────────────────────────
-// MAIN KNOWLEDGE GRAPH VIEW
+// MAIN VIEW
 // ─────────────────────────────────────────────────────────────────────────────
-
 interface KnowledgeGraphViewProps {
-  triplets:  TripletRow[];
-  edges:     EdgeRow[];
+  triplets: TripletRow[];
+  edges: EdgeRow[];
   isLoading: boolean;
-  width?:    number | string;
-  height?:   number | string;
+  width?: number | string;
+  height?: number | string;
   onExploreNode?: (label: string) => void;
+  onForgetEdge?: (edgeId: string) => void;
 }
 
 const NODE_TYPES = { knowledgeNode: KnowledgeNodeComponent };
@@ -434,207 +287,221 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
   triplets,
   edges,
   isLoading,
-  width  = 800,
+  width = 800,
   height = 600,
   onExploreNode,
+  onForgetEdge,
 }) => {
-
+  const reducedMotion = usePrefersReducedMotion();
   const [nodes, setNodes, onNodesChange] = useNodesState<KnowledgeNode>([]);
   const [rfEdges, setEdges, onEdgesChange] = useEdgesState<KnowledgeEdge>([]);
   const [selectedNode, setSelectedNode] = useState<KnowledgeNode | null>(null);
+  const [listView, setListView] = useState(false);
   const prevGraphRef = useRef<{ nodes: KnowledgeNode[]; edges: KnowledgeEdge[] }>({
-    nodes: [], edges: [],
+    nodes: [],
+    edges: [],
   });
 
-  // Re-map when triplets or edges change
   useEffect(() => {
     if (triplets.length === 0) {
-      // Explicitly clear on empty input. The old early-return left the
-      // previous session's graph on screen when switching to a fresh
-      // session, and left prevGraphRef pinning new layouts to stale
-      // coordinates.
       setNodes([]);
       setEdges([]);
       setSelectedNode(null);
       prevGraphRef.current = { nodes: [], edges: [] };
       return;
     }
-
     const numWidth = typeof width === "number" ? width : 800;
     const numHeight = typeof height === "number" ? height : 600;
     const newGraph = mapTripletRowsToReactFlow(triplets, edges, numWidth, numHeight);
-
-    // Incremental merge: preserve existing node positions
-    const merged = mergeGraphUpdate(
-      prevGraphRef.current,
-      newGraph,
-    );
-
+    // Reduced motion: no travelling edge animation.
+    if (reducedMotion) {
+      newGraph.edges = newGraph.edges.map((e) => ({ ...e, animated: false }));
+    }
+    const merged = mergeGraphUpdate(prevGraphRef.current, newGraph);
     setNodes(merged.nodes);
     setEdges(merged.edges);
     prevGraphRef.current = merged;
-  }, [triplets, edges, width, height, setNodes, setEdges]);
+  }, [triplets, edges, width, height, reducedMotion, setNodes, setEdges]);
 
-  const onNodeClick = useCallback(
-    (_: React.MouseEvent, node: KnowledgeNode) => {
-      setSelectedNode((prev) => (prev?.id === node.id ? null : node));
-    },
-    []
+  const onNodeClick = useCallback((_: React.MouseEvent, node: KnowledgeNode) => {
+    setSelectedNode((prev) => (prev?.id === node.id ? null : node));
+  }, []);
+
+  const empty = !isLoading && nodes.length === 0;
+
+  const listItems = useMemo(
+    () =>
+      rfEdges.map((e) => {
+        const s = nodes.find((n) => n.id === e.source)?.data.label ?? e.source;
+        const t = nodes.find((n) => n.id === e.target)?.data.label ?? e.target;
+        const pred = String(e.data?.predicate ?? "related to").replace(/_/g, " ");
+        return { id: e.id, s, t, pred, evidence: e.data?.evidence as string | undefined };
+      }),
+    [rfEdges, nodes]
   );
 
   return (
-    <div
-      style={{
-        width: width ?? "100%",
-        height: height ?? "100%",
-        background: "var(--surface)",
-        overflow: "hidden",
-        position: "relative",
-      }}
-    >
-      {/* Loading overlay */}
+    <div style={{ width: width ?? "100%", height: height ?? "100%", background: "var(--surface)", overflow: "hidden", position: "relative" }}>
+      {/* Loading — theme-aware, never a white overlay */}
       {isLoading && (
         <div
           style={{
-            position:  "absolute",
-            inset:     0,
-            zIndex:    100,
-            display:   "flex",
-            alignItems:"center",
+            position: "absolute",
+            inset: 0,
+            zIndex: 100,
+            display: "flex",
+            alignItems: "center",
             justifyContent: "center",
-            background: "rgba(255,255,255,0.75)",
+            background: "var(--surface-glass)",
             backdropFilter: "blur(4px)",
+            color: "var(--text-muted)",
+            fontSize: 13,
+            fontWeight: 500,
           }}
         >
-          <div style={{ color: "var(--brand)", fontSize: 14, fontWeight: 500 }}>
-            Updating knowledge graph…
+          Updating the context graph…
+        </div>
+      )}
+
+      {/* Empty */}
+      {empty && !listView && (
+        <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24, textAlign: "center" }}>
+          <div style={{ display: "grid", placeItems: "center", width: 44, height: 44, borderRadius: "9999px", background: "var(--surface-alt)", color: "var(--text-muted)", marginBottom: 12 }}>
+            <Network size={20} />
           </div>
-        </div>
-      )}
-
-      {/* Empty state */}
-      {!isLoading && nodes.length === 0 && (
-        <div
-          style={{
-            position:  "absolute",
-            inset:     0,
-            display:   "flex",
-            flexDirection: "column",
-            alignItems:"center",
-            justifyContent: "center",
-            color:     "var(--text-muted)",
-          }}
-        >
-          <svg className="w-12 h-12 text-slate-300 mb-3" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <circle cx="32" cy="18" r="4" fill="var(--text-subtle)" />
-            <circle cx="16" cy="42" r="4" fill="var(--border)" stroke="var(--text-subtle)" strokeWidth="2" />
-            <circle cx="48" cy="42" r="4" fill="var(--border)" stroke="var(--text-subtle)" strokeWidth="2" />
-            <line x1="29.5" y1="21.5" x2="18.5" y2="38.5" stroke="var(--text-subtle)" strokeWidth="2" strokeDasharray="3 3" />
-            <line x1="34.5" y1="21.5" x2="45.5" y2="38.5" stroke="var(--text-subtle)" strokeWidth="2" strokeDasharray="3 3" />
-            <line x1="20" y1="42" x2="44" y2="42" stroke="var(--border)" strokeWidth="2" />
-          </svg>
-          <p style={{ fontSize: 13, fontWeight: 500, color: "var(--text)" }}>
-            Start a conversation to build your learning map
+          <p style={{ fontSize: 15, fontWeight: 500, color: "var(--text)", margin: 0 }}>
+            Nothing here yet
           </p>
-          <p style={{ fontSize: 11, color: "var(--text-subtle)", marginTop: 4 }}>
-            Andrew will map details to the Memory Matrix in real-time
+          <p style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 6, maxWidth: "30ch" }}>
+            As you talk, the details and connections worth remembering will
+            appear here. You can inspect or remove any of them.
           </p>
         </div>
       )}
 
-      <ReactFlow
-        nodes={nodes}
-        edges={rfEdges}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
-        onNodeClick={onNodeClick}
-        nodeTypes={NODE_TYPES}
-        fitView
-        fitViewOptions={{ padding: 0.2 }}
-        minZoom={0.3}
-        maxZoom={2.5}
-        proOptions={{ hideAttribution: true }}
-        style={{ background: "transparent" }}
-      >
-        <Background
-          variant={BackgroundVariant.Dots}
-          gap={24}
-          size={1}
-          color="var(--border)"
-        />
-        <Controls
-          style={{
-            background: "var(--surface)",
-            border:     "1px solid var(--border)",
-            borderRadius: 8,
-          }}
-        />
-        {nodes.length > 0 && (
-          <MiniMap
+      {/* View toggle: graph vs accessible list */}
+      {!empty && (
+        <div style={{ position: "absolute", top: 10, right: 10, zIndex: 20 }}>
+          <button
+            onClick={() => setListView((v) => !v)}
+            aria-pressed={listView}
             style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
               background: "var(--surface)",
-              border:     "1px solid var(--border)",
-            }}
-            nodeColor={(n: KnowledgeNode) =>
-              NODE_TYPE_COLORS[n.data?.nodeType] ?? "var(--text-subtle)"
-            }
-            maskColor="rgba(247,248,250,0.5)"
-          />
-        )}
-
-        {/* Legend */}
-        <Panel position="top-left">
-          <GraphLegend />
-        </Panel>
-
-        {/* Node detail panel */}
-        {selectedNode && (
-          <Panel position="top-right">
-            <NodeDetailPanel
-              node={selectedNode}
-              allEdges={rfEdges}
-              allNodes={nodes}
-              onClose={() => setSelectedNode(null)}
-              onExplore={onExploreNode}
-            />
-          </Panel>
-        )}
-
-
-        {/* Node count badge */}
-        <Panel position="bottom-left">
-          <div
-            style={{
-              background:   "var(--surface)",
-              border:       "1px solid var(--border)",
+              border: "1px solid var(--border)",
               borderRadius: 8,
-              padding:      "4px 12px",
-              color:        "var(--text-muted)",
-              fontSize:     11,
+              color: "var(--text-muted)",
+              fontSize: 12,
+              padding: "5px 10px",
+              cursor: "pointer",
             }}
           >
-            {nodes.length} concepts · {rfEdges.length} relations
-          </div>
-        </Panel>
-      </ReactFlow>
+            {listView ? <Network size={14} /> : <List size={14} />}
+            {listView ? "Graph" : "List"}
+          </button>
+        </div>
+      )}
 
-      {/* Spinning and ping animation keyframes (injected once) */}
-      <style>{`
-        @keyframes spin {
-          from { transform: rotate(0deg); }
-          to   { transform: rotate(360deg); }
-        }
-        @keyframes ping {
-          0% { transform: scale(1); opacity: 1; }
-          70%, 100% { transform: scale(2.2); opacity: 0; }
-        }
-      `}</style>
+      {/* Accessible list alternative — same facts and controls */}
+      {listView && !empty && (
+        <div style={{ position: "absolute", inset: 0, overflowY: "auto", padding: "48px 14px 14px", background: "var(--surface)" }}>
+          {listItems.length === 0 ? (
+            <p style={{ color: "var(--text-muted)", fontSize: 13 }}>No connections yet.</p>
+          ) : (
+            <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 8 }}>
+              {listItems.map((it) => (
+                <li key={it.id} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px", background: "var(--surface-alt)" }}>
+                  <div style={{ fontSize: 13, color: "var(--text)" }}>
+                    <strong>{it.s}</strong>{" "}
+                    <span style={{ color: "var(--text-muted)" }}>{it.pred}</span>{" "}
+                    <strong>{it.t}</strong>
+                  </div>
+                  {it.evidence && (
+                    <p style={{ fontSize: 12, color: "var(--text-subtle)", fontStyle: "italic", margin: "4px 0 0" }}>
+                      &ldquo;{it.evidence.slice(0, 140)}&rdquo;
+                    </p>
+                  )}
+                  <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                    {onExploreNode && (
+                      <button onClick={() => onExploreNode(it.t)} style={listBtn}>
+                        <Sparkles size={12} /> Ask
+                      </button>
+                    )}
+                    {onForgetEdge && (
+                      <button onClick={() => onForgetEdge(it.id)} style={listBtn}>
+                        <RotateCcw size={12} /> Forget
+                      </button>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {!listView && (
+        <ReactFlow
+          nodes={nodes}
+          edges={rfEdges}
+          onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
+          onNodeClick={onNodeClick}
+          nodeTypes={NODE_TYPES}
+          fitView
+          fitViewOptions={{ padding: 0.2 }}
+          minZoom={0.3}
+          maxZoom={2.5}
+          proOptions={{ hideAttribution: true }}
+          style={{ background: "transparent" }}
+        >
+          <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="var(--border)" />
+          <Controls style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8 }} />
+          {nodes.length > 8 && (
+            <MiniMap
+              style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
+              nodeColor="var(--graph-node-muted)"
+              maskColor="var(--surface-glass)"
+            />
+          )}
+
+          {selectedNode && (
+            <Panel position="top-right">
+              <NodeInspector
+                node={selectedNode}
+                allEdges={rfEdges}
+                allNodes={nodes}
+                onClose={() => setSelectedNode(null)}
+                onExplore={onExploreNode}
+                onForgetEdge={onForgetEdge}
+              />
+            </Panel>
+          )}
+
+          <Panel position="bottom-left">
+            <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, padding: "4px 12px", color: "var(--text-muted)", fontSize: 11 }}>
+              {nodes.length} items · {rfEdges.length} connections
+            </div>
+          </Panel>
+        </ReactFlow>
+      )}
     </div>
   );
 };
 
-export default KnowledgeGraphView;
+const listBtn: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 4,
+  background: "none",
+  border: "1px solid var(--border)",
+  borderRadius: 6,
+  color: "var(--text-muted)",
+  fontSize: 11,
+  padding: "3px 8px",
+  cursor: "pointer",
+};
 
-// ─────────────────────────────────────────────────────────────────────────────
-// UTILITY (duplicated from graphMapper to avoid a circular dep)
-// ─────────────────────────────────────────────────────────────────────────────
+export default KnowledgeGraphView;

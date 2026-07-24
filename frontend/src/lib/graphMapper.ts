@@ -112,23 +112,21 @@ function buildNode(row: TripletRow): KnowledgeNode {
     // React Flow node style — overridden by custom node component, but
     // provides sensible defaults for the built-in node renderer fallback.
     style: {
-      background:   "#ffffff",
-      color:        "#111827",
-      borderRadius: "8px",
-      border:       `1px solid #e5e7eb`,
-      borderLeft:   `6px solid ${baseColor}`,
+      background:   "var(--surface)",
+      color:        "var(--text)",
+      borderRadius: "10px",
+      border:       "1px solid var(--border)",
+      borderLeft:   `3px solid ${baseColor}`,
       width:        160,
-      height:       80,
-      fontSize:     "12px",
+      height:       72,
+      fontSize:     "13px",
       fontWeight:   "600",
       display:      "flex",
       alignItems:   "center",
       justifyContent: "center",
       textAlign:    "center",
       padding:      "8px",
-      boxShadow:    row.hop_distance === 0
-        ? `0 0 15px ${baseColor}44, 0 4px 6px rgba(0,0,0,0.05)`
-        : "0 2px 6px rgba(0,0,0,0.05)",
+      boxShadow:    "0 2px 6px rgba(0,0,0,0.06)",
     },
   };
 }
@@ -183,14 +181,14 @@ function buildCombinedEdge(group: EdgeRow[]): KnowledgeEdge {
     animated: isAnimated,
     label:  combinedLabel,
     labelStyle: {
-      fontSize:   "9px",
+      fontSize:   "11px",
       fontWeight: "600",
-      fill:       edgeColor,
+      fill:       "var(--graph-node-muted)",
     },
     labelBgStyle: {
-      fill:        "#ffffff",
+      fill:        "var(--surface)",
       fillOpacity: 0.95,
-      stroke:      "#e5e7eb",
+      stroke:      "var(--border)",
       strokeWidth: 1,
       rx:          4,
       ry:          4,
