@@ -22,6 +22,7 @@ export function ContextGraphPanel({
   triplets,
   edges,
   onExploreNode,
+  onForgetEdge,
 }: {
   mobileVisible: boolean
   onCloseMobile: () => void
@@ -32,6 +33,7 @@ export function ContextGraphPanel({
   triplets: TripletRow[]
   edges: EdgeRow[]
   onExploreNode: (concept: string) => void
+  onForgetEdge: (edgeId: string) => void
 }) {
   return (
     <div
@@ -87,6 +89,7 @@ export function ContextGraphPanel({
           width="100%"
           height="100%"
           onExploreNode={onExploreNode}
+          onForgetEdge={onForgetEdge}
         />
       </div>
     </div>

@@ -410,6 +410,20 @@ export default function ChatPage() {
     await handleSyncGraph();
   };
 
+  // Retract one belief from the graph. Soft-deletes on the server (keeps
+  // history), then refreshes the view so the connection disappears.
+  const handleForgetEdge = async (edgeId: string) => {
+    try {
+      await fetch(`${API_BASE_URL}/api/v1/chat/graph/edge/${edgeId}`, {
+        method: "DELETE",
+        headers: { "X-Tenant-Id": tenantId },
+      });
+    } catch (e) {
+      console.error("Could not forget that connection:", e);
+    }
+    void handleSyncGraph(graphView);
+  };
+
   const handleResetMemory = async () => {
     if (!window.confirm("Are you sure you want to reset your learning history? This will clear all extracted graph concepts and dialogue history in the database.")) {
       return;
@@ -1013,6 +1027,7 @@ export default function ChatPage() {
           setUserInput(`Explain the concept of ${concept} and its connections in detail.`);
           submitDialogueMessage(`Explain the concept of ${concept} and its connections in detail.`);
         }}
+        onForgetEdge={handleForgetEdge}
       />
 
       {/* ──────────────────────────────────────────────────
@@ -1022,12 +1037,14 @@ export default function ChatPage() {
         <VoiceOverlay
           voiceState={voiceState}
           ttsSpeed={ttsSpeed}
+          transcript={lastMsg?.role === "assistant" ? lastMsg.content : ""}
+          clonedVoiceAvailable={clonedVoiceAvailable}
           closeRef={voiceCloseRef}
           onExit={() => {
             stopSpeaking();
             setVoiceState("inactive");
           }}
-          onCenterAction={() => {
+          onInterrupt={() => {
             if (voiceState === "speaking") {
               stopSpeaking();
               setVoiceState("listening");
@@ -1035,6 +1052,7 @@ export default function ChatPage() {
               setVoiceState("inactive");
             }
           }}
+          onMute={stopSpeaking}
           onSpeedDown={() => setTtsSpeed((prev) => Math.max(0.8, prev - 0.1))}
           onSpeedUp={() => setTtsSpeed((prev) => Math.min(1.5, prev + 0.1))}
         />
