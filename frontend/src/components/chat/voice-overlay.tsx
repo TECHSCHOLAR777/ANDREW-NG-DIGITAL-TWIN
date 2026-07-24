@@ -1,14 +1,14 @@
 "use client"
-/* eslint-disable react-hooks/set-state-in-effect */
-// The amplitude driver resets state synchronously when the voice state changes
-// and updates it from a throttled rAF loop; both are legitimate animation
-// synchronisation, not render-time state churn.
 
 import * as React from "react"
 import { Minus, Volume2, VolumeX, X } from "lucide-react"
 
 import { AndrewPortrait } from "@/components/andrew-portrait"
-import type { VoiceState } from "@/app/app/chat-types"
+import type {
+  VoiceLatencyPhase,
+  VoiceProvider,
+  VoiceState,
+} from "@/app/app/chat-types"
 
 const PORTRAIT_SRC = "/andrew-portrait.png"
 
@@ -22,17 +22,16 @@ const PORTRAIT_SRC = "/andrew-portrait.png"
  * the answer, and the voice provider (cloned versus browser fallback) and the
  * synthetic-voice provenance are always visible.
  *
- * Presentational only: the page still owns the speech engines, TTS, and the
- * state machine, and the audio pipeline is untouched. The amplitude here is a
- * light visual driver derived from the speaking state (a real Web Audio
- * analyser on the playback path is a later refinement), and it is suppressed
- * under reduced motion.
+ * Presentational only: the page owns the speech engines, TTS, state machine,
+ * and the playback-synchronised amplitude supplied to the portrait.
  */
 export function VoiceOverlay({
   voiceState,
+  latencyPhase,
+  voiceProvider,
+  amplitude,
   ttsSpeed,
   transcript,
-  clonedVoiceAvailable,
   closeRef,
   onExit,
   onInterrupt,
@@ -41,9 +40,11 @@ export function VoiceOverlay({
   onSpeedUp,
 }: {
   voiceState: Exclude<VoiceState, "inactive">
+  latencyPhase: VoiceLatencyPhase
+  voiceProvider: VoiceProvider
+  amplitude: number
   ttsSpeed: number
   transcript: string
-  clonedVoiceAvailable: boolean | null
   closeRef: React.RefObject<HTMLButtonElement | null>
   onExit: () => void
   onInterrupt: () => void
@@ -51,32 +52,23 @@ export function VoiceOverlay({
   onSpeedDown: () => void
   onSpeedUp: () => void
 }) {
-  // A gentle amplitude while speaking so the portrait feels alive. Throttled and
-  // disabled under reduced motion; the page's audio path is not touched.
-  const [amp, setAmp] = React.useState(0)
+  const [elapsed, setElapsed] = React.useState<{
+    phase: VoiceLatencyPhase
+    seconds: number
+  }>({ phase: "idle", seconds: 0 })
   React.useEffect(() => {
-    if (voiceState !== "speaking") {
-      setAmp(0)
-      return
-    }
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      setAmp(0.5)
-      return
-    }
-    const start = performance.now()
-    let raf = 0
-    let last = 0
-    const loop = (t: number) => {
-      if (t - last > 40) {
-        last = t
-        const s = (t - start) / 1000
-        setAmp(0.35 + 0.4 * Math.abs(Math.sin(s * 6)) + 0.2 * Math.abs(Math.sin(s * 11)))
-      }
-      raf = requestAnimationFrame(loop)
-    }
-    raf = requestAnimationFrame(loop)
-    return () => cancelAnimationFrame(raf)
-  }, [voiceState])
+    if (voiceState !== "thinking") return
+    const startedAt = performance.now()
+    const timer = window.setInterval(() => {
+      setElapsed({
+        phase: latencyPhase,
+        seconds: Math.floor((performance.now() - startedAt) / 1000),
+      })
+    }, 500)
+    return () => window.clearInterval(timer)
+  }, [latencyPhase, voiceState])
+  const elapsedSeconds =
+    elapsed.phase === latencyPhase ? elapsed.seconds : 0
 
   const STATE_LABEL: Record<typeof voiceState, string> = {
     listening: "Listening",
@@ -84,12 +76,22 @@ export function VoiceOverlay({
     speaking: "Speaking",
   }
 
+  const PHASE_LABEL: Record<VoiceLatencyPhase, string> = {
+    idle: "Ready for your question",
+    connecting: "Connecting securely",
+    retrieving: "Finding the most relevant context",
+    generating: "Thinking through your question",
+    synthesizing: "Preparing Andrew's voice",
+    playing: "Playing cloned speech",
+    fallback: "Keeping the conversation moving",
+  }
+
   const provider =
-    clonedVoiceAvailable === null
-      ? "Preparing voice"
-      : clonedVoiceAvailable
+    voiceProvider === "preparing"
+      ? "Checking cloned voice"
+      : voiceProvider === "clone"
         ? "Andrew's cloned voice"
-        : "Browser voice (fallback)"
+        : "Browser voice fallback"
 
   return (
     <div
@@ -134,7 +136,7 @@ export function VoiceOverlay({
         <AndrewPortrait
           src={PORTRAIT_SRC}
           mode="voice"
-          amplitude={amp}
+          amplitude={voiceState === "speaking" ? amplitude : 0}
           className="h-[240px] w-[240px] sm:h-[320px] sm:w-[320px]"
         />
 
@@ -156,7 +158,13 @@ export function VoiceOverlay({
         <p className="mt-3 text-[15px] font-medium text-[var(--text)]">
           {STATE_LABEL[voiceState]}
         </p>
-        <p className="mt-1 text-[12px] text-[var(--text-subtle)]">{provider}</p>
+        <p className="mt-1 text-[12px] text-[var(--text-muted)]">
+          {PHASE_LABEL[latencyPhase]}
+          {voiceState === "thinking" && elapsedSeconds >= 2
+            ? ` · ${elapsedSeconds}s`
+            : ""}
+        </p>
+        <p className="mt-1 text-[11px] text-[var(--text-subtle)]">{provider}</p>
 
         {/* Live transcript */}
         {transcript && (

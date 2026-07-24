@@ -11,6 +11,10 @@ import { MessageBubble } from "@/components/chat/message-bubble";
 import { Composer } from "@/components/chat/composer";
 import { ContextGraphPanel } from "@/components/chat/context-graph-panel";
 import { VoiceOverlay } from "@/components/chat/voice-overlay";
+import {
+  readWavAmplitude,
+  type WavAmplitudeEnvelope,
+} from "@/lib/wavAmplitude";
 import type { TripletRow } from "@/types/graph";
 import {
   KEY_LOCAL_STORAGE_GEMINI,
@@ -22,12 +26,18 @@ import {
   type GraphContextNode,
   type ChatSession,
   type RetrievedChunk,
+  type VoiceLatencyPhase,
+  type VoiceProvider,
   type VoiceState,
   type SpeechRecognitionLike,
   type SpeechRecognitionResultEventLike,
   type SpeechRecognitionErrorEventLike,
   type SpeechWindow,
 } from "@/app/app/chat-types";
+
+const INTERACTIVE_TTS_DEADLINE_MS = 8_000;
+const READ_ALOUD_TTS_DEADLINE_MS = 20_000;
+const CHAT_TURN_DEADLINE_MS = 120_000;
 
 export default function ChatPage() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -41,6 +51,7 @@ export default function ChatPage() {
   const { data: authSession, status: authStatus } = useSession();
   const [graphView, setGraphView] = useState<"session" | "global">("session");
   const [isLoading, setIsLoading] = useState(false);
+  const [waitElapsedSeconds, setWaitElapsedSeconds] = useState(0);
   const [isSyncingGraph, setIsSyncingGraph] = useState(false);
 
   // Which panel is visible below the lg breakpoint. On a phone this is a chat
@@ -65,6 +76,8 @@ export default function ChatPage() {
   // Ref handles for speech engines
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const voiceStateRef = useRef<string>("inactive");
+  const chatAbortRef = useRef<AbortController | null>(null);
+  const chatAbortReasonRef = useRef<"interrupt" | "timeout" | null>(null);
 
   // Always-fresh handle to submitDialogueMessage for browser speech callbacks.
   // The recognition handlers are registered once on mount; without this ref
@@ -76,15 +89,25 @@ export default function ChatPage() {
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const ttsAbortRef = useRef<AbortController | null>(null);
   const isPlayingRef = useRef<boolean>(false);
-  // Set when the cloned-voice service returns 502, so playback switches to
-  // browser speech for the rest of the answer instead of going quiet.
-  const clonedVoiceDownRef = useRef<boolean>(false);
-  const [clonedVoiceAvailable, setClonedVoiceAvailable] = useState<boolean | null>(null);
+  const voiceAmplitudeFrameRef = useRef<number | null>(null);
+  const [voiceAmplitude, setVoiceAmplitude] = useState(0);
+  const [voiceLatencyPhase, setVoiceLatencyPhase] =
+    useState<VoiceLatencyPhase>("idle");
+  const [voiceProvider, setVoiceProvider] =
+    useState<VoiceProvider>("preparing");
 
   // Keep state sync ref for async timers/callbacks
   useEffect(() => {
     voiceStateRef.current = voiceState;
   }, [voiceState]);
+
+  useEffect(() => {
+    if (!isLoading) return;
+    const timer = window.setInterval(() => {
+      setWaitElapsedSeconds((seconds) => seconds + 1);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [isLoading]);
   
   const chatBottomRef = useRef<HTMLDivElement>(null);
   const voiceCloseRef = useRef<HTMLButtonElement>(null);
@@ -116,6 +139,8 @@ export default function ChatPage() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+    // stopSpeaking only reads live refs and stable React setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voiceState]);
 
   // 1. Initial configuration load & Web Speech API setup
@@ -136,8 +161,8 @@ export default function ChatPage() {
     // voice the user is about to hear instead of leaving them guessing.
     fetch(`${API_BASE_URL}/api/v1/chat/tts/status`)
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => setClonedVoiceAvailable(d ? Boolean(d.available) : false))
-      .catch(() => setClonedVoiceAvailable(false));
+      .then((d) => setVoiceProvider(d?.available ? "clone" : "browser"))
+      .catch(() => setVoiceProvider("browser"));
 
     // Restore conversations from the server. Every turn has always been
     // written to Postgres; nothing ever read them back, so a refresh destroyed
@@ -236,6 +261,8 @@ export default function ChatPage() {
         // Safe to ignore
       }
     }
+    // stopSpeaking only reads live refs and stable React setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voiceState]);
 
   // 2. Scroll to bottom, but only when the reader is already near it.
@@ -259,6 +286,14 @@ export default function ChatPage() {
   const hasStreamingText = Boolean(
     isLoading && lastMsg?.role === "assistant" && lastMsg.content.length > 0
   );
+  const waitingLabel =
+    voiceLatencyPhase === "retrieving"
+      ? "Finding the most relevant context"
+      : voiceLatencyPhase === "generating"
+        ? "Andrew is thinking through your question"
+        : waitElapsedSeconds >= 4
+          ? "The backend is waking up"
+          : "Connecting to Andrew";
   const showSuggestions = Boolean(
     activeSession && !isLoading && !chatError &&
     activeSession.messages.filter((m) => m.role === "user").length === 0
@@ -499,6 +534,54 @@ export default function ChatPage() {
   };
   // Cancel speech helper — also aborts in-flight TTS network requests so
   // interrupting the tutor stops burning synthesis compute on unheard audio.
+  const stopVoiceAmplitude = () => {
+    if (voiceAmplitudeFrameRef.current !== null) {
+      cancelAnimationFrame(voiceAmplitudeFrameRef.current);
+      voiceAmplitudeFrameRef.current = null;
+    }
+    setVoiceAmplitude(0);
+  };
+
+  const trackClonedVoiceAmplitude = (
+    audio: HTMLAudioElement,
+    envelope: WavAmplitudeEnvelope | null
+  ) => {
+    stopVoiceAmplitude();
+    if (!envelope?.values.length) {
+      setVoiceAmplitude(0.55);
+      return;
+    }
+
+    const update = () => {
+      if (audio.paused || audio.ended) {
+        stopVoiceAmplitude();
+        return;
+      }
+      const index = Math.min(
+        envelope.values.length - 1,
+        Math.floor(audio.currentTime * envelope.samplesPerSecond)
+      );
+      setVoiceAmplitude(envelope.values[index] ?? 0);
+      voiceAmplitudeFrameRef.current = requestAnimationFrame(update);
+    };
+    voiceAmplitudeFrameRef.current = requestAnimationFrame(update);
+  };
+
+  const trackBrowserVoiceAmplitude = () => {
+    stopVoiceAmplitude();
+    const startedAt = performance.now();
+    const update = (now: number) => {
+      const seconds = (now - startedAt) / 1000;
+      setVoiceAmplitude(
+        0.28 +
+          Math.abs(Math.sin(seconds * 8.5)) * 0.42 +
+          Math.abs(Math.sin(seconds * 13.5)) * 0.18
+      );
+      voiceAmplitudeFrameRef.current = requestAnimationFrame(update);
+    };
+    voiceAmplitudeFrameRef.current = requestAnimationFrame(update);
+  };
+
   const stopSpeaking = () => {
     if (typeof window !== "undefined" && window.speechSynthesis) {
       window.speechSynthesis.cancel();
@@ -513,21 +596,35 @@ export default function ChatPage() {
       currentAudioRef.current = null;
     }
     isPlayingRef.current = false;
+    stopVoiceAmplitude();
+    setVoiceLatencyPhase("idle");
   };
 
   // Fallback when the cloned-voice service is unreachable. The browser's own
   // synthesis is generic, but a generic voice that works beats a cloned voice
   // that does not, and the GPU session backing the clone is ephemeral by
   // design (see notebooks/kaggle_tts_server.py).
-  const speakWithBrowser = (text: string, onFinished?: () => void) => {
+  const speakWithBrowser = (
+    text: string,
+    onStarted?: () => void,
+    onFinished?: () => void
+  ) => {
     if (typeof window === "undefined" || !window.speechSynthesis) {
       onFinished?.();
       return;
     }
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = ttsSpeed;
-    utterance.onend = () => onFinished?.();
-    utterance.onerror = () => onFinished?.();
+    utterance.onstart = () => {
+      trackBrowserVoiceAmplitude();
+      onStarted?.();
+    };
+    const done = () => {
+      stopVoiceAmplitude();
+      onFinished?.();
+    };
+    utterance.onend = done;
+    utterance.onerror = done;
     window.speechSynthesis.speak(utterance);
   };
 
@@ -538,94 +635,230 @@ export default function ChatPage() {
   // that. This is what collapses time-to-first-audio: previously the client
   // waited for the entire answer, then synthesised sentence by sentence, so
   // nothing was audible for 8 to 30 seconds.
-  const createStreamingSpeaker = (onFinished?: () => void) => {
+  const createStreamingSpeaker = (
+    interactive: boolean,
+    onFinished?: () => void
+  ) => {
     const controller = new AbortController();
     ttsAbortRef.current = controller;
     isPlayingRef.current = true;
 
-    const pending: Promise<string | null>[] = [];
-    const pendingText: string[] = [];   // parallel to `pending`, for fallback
+    type SynthesizedSentence = {
+      url: string;
+      envelope: WavAmplitudeEnvelope | null;
+    } | null;
+    type SpeechJob = {
+      text: string;
+      result: Promise<SynthesizedSentence>;
+      resolve: (result: SynthesizedSentence) => void;
+    };
+
+    const jobs: SpeechJob[] = [];
     let playIndex = 0;
+    let synthIndex = 0;
+    let synthesizing = false;
     let inputClosed = false;
     let playing = false;
+    let finished = false;
+    let cloneEnabled = voiceProvider !== "browser";
+    const deadlineMs = interactive
+      ? INTERACTIVE_TTS_DEADLINE_MS
+      : READ_ALOUD_TTS_DEADLINE_MS;
 
-    const synthesize = async (sentence: string): Promise<string | null> => {
+    const finishOnce = () => {
+      if (finished) return;
+      finished = true;
+      isPlayingRef.current = false;
+      stopVoiceAmplitude();
+      onFinished?.();
+    };
+
+    const markPlaybackStarted = (provider: "clone" | "browser") => {
+      setVoiceProvider(provider);
+      if (interactive && voiceStateRef.current !== "inactive") {
+        setVoiceLatencyPhase(provider === "clone" ? "playing" : "fallback");
+        setVoiceState("speaking");
+      }
+    };
+
+    const markPlaybackEnded = () => {
+      stopVoiceAmplitude();
+      if (
+        interactive &&
+        voiceStateRef.current !== "inactive" &&
+        (!inputClosed || playIndex < jobs.length)
+      ) {
+        setVoiceLatencyPhase("synthesizing");
+        setVoiceState("thinking");
+      }
+    };
+
+    const synthesize = async (
+      sentence: string
+    ): Promise<SynthesizedSentence> => {
+      if (!cloneEnabled || controller.signal.aborted) return null;
+
+      const requestController = new AbortController();
+      const abortRequest = () => requestController.abort();
+      controller.signal.addEventListener("abort", abortRequest, { once: true });
+      const timeout = window.setTimeout(
+        () => requestController.abort(),
+        deadlineMs
+      );
+
       try {
         const res = await fetch(`${API_BASE_URL}/api/v1/chat/tts`, {
           method: "POST",
-          headers: { "Content-Type": "application/json", "X-Tenant-Id": tenantId },
+          headers: {
+            "Content-Type": "application/json",
+            "X-Tenant-Id": tenantId,
+          },
           body: JSON.stringify({ text: sentence, speed: ttsSpeed }),
-          signal: controller.signal,
+          signal: requestController.signal,
         });
         if (!res.ok) {
-          // 502 means the cloned-voice service is down, which is expected
-          // whenever the GPU session has expired. Fall back rather than
-          // dropping the sentence silently.
-          if (res.status === 502) clonedVoiceDownRef.current = true;
+          cloneEnabled = false;
+          setVoiceProvider("browser");
           return null;
         }
-        clonedVoiceDownRef.current = false;
-        return URL.createObjectURL(await res.blob());
+        const blob = await res.blob();
+        const envelope = await readWavAmplitude(blob);
+        setVoiceProvider("clone");
+        return {
+          url: URL.createObjectURL(blob),
+          envelope,
+        };
       } catch {
-        return null; // aborted or failed: skip this sentence, keep the flow
+        if (!controller.signal.aborted) {
+          cloneEnabled = false;
+          setVoiceProvider("browser");
+        }
+        return null;
+      } finally {
+        window.clearTimeout(timeout);
+        controller.signal.removeEventListener("abort", abortRequest);
       }
+    };
+
+    const startNextSynthesis = () => {
+      if (
+        synthesizing ||
+        synthIndex >= jobs.length ||
+        controller.signal.aborted
+      ) {
+        return;
+      }
+      const job = jobs[synthIndex];
+      synthIndex += 1;
+      synthesizing = true;
+      void synthesize(job.text)
+        .then(job.resolve)
+        .finally(() => {
+          synthesizing = false;
+          startNextSynthesis();
+          void playNext();
+        });
     };
 
     const playNext = async () => {
       if (playing) return;
       playing = true;
 
-      while (playIndex < pending.length) {
+      while (playIndex < jobs.length) {
         if (!isPlayingRef.current || controller.signal.aborted) break;
 
-        const url = await pending[playIndex];
-        const sentenceText = pendingText[playIndex];
+        if (interactive && voiceStateRef.current !== "inactive") {
+          setVoiceLatencyPhase("synthesizing");
+        }
+        const job = jobs[playIndex];
+        const synthesized = await job.result;
         playIndex += 1;
-        if (!url) {
-          // No cloned audio for this sentence. Speak it with the browser so
-          // the answer is still heard end to end.
-          if (clonedVoiceDownRef.current && sentenceText) {
-            await new Promise<void>((resolve) => speakWithBrowser(sentenceText, resolve));
-          }
+        if (!isPlayingRef.current || controller.signal.aborted) break;
+
+        if (!synthesized) {
+          await new Promise<void>((resolve) =>
+            speakWithBrowser(
+              job.text,
+              () => markPlaybackStarted("browser"),
+              () => {
+                markPlaybackEnded();
+                resolve();
+              }
+            )
+          );
           continue;
         }
-        if (!isPlayingRef.current || controller.signal.aborted) {
-          URL.revokeObjectURL(url);
-          break;
-        }
 
-        await new Promise<void>((resolve) => {
-          const audio = new Audio(url);
+        const played = await new Promise<boolean>((resolve) => {
+          const audio = new Audio(synthesized.url);
+          audio.playbackRate = ttsSpeed;
+          audio.preservesPitch = true;
           currentAudioRef.current = audio;
-          const done = () => {
-            URL.revokeObjectURL(url);
-            resolve();
+          let started = false;
+          let settled = false;
+          const done = (completed: boolean) => {
+            if (settled) return;
+            settled = true;
+            if (currentAudioRef.current === audio) {
+              currentAudioRef.current = null;
+            }
+            URL.revokeObjectURL(synthesized.url);
+            markPlaybackEnded();
+            resolve(completed);
           };
-          audio.onended = done;
-          audio.onerror = done;
-          audio.play().catch(done);
+          audio.onplay = () => {
+            started = true;
+            trackClonedVoiceAmplitude(audio, synthesized.envelope);
+            markPlaybackStarted("clone");
+          };
+          audio.onended = () => done(started);
+          audio.onerror = () => done(false);
+          audio.play().catch(() => done(false));
         });
+
+        if (!played && !controller.signal.aborted) {
+          setVoiceProvider("browser");
+          await new Promise<void>((resolve) =>
+            speakWithBrowser(
+              job.text,
+              () => markPlaybackStarted("browser"),
+              () => {
+                markPlaybackEnded();
+                resolve();
+              }
+            )
+          );
+        }
       }
 
       playing = false;
-      if (inputClosed && playIndex >= pending.length) {
-        isPlayingRef.current = false;
-        onFinished?.();
+      if (inputClosed && playIndex >= jobs.length) {
+        finishOnce();
       }
     };
 
     return {
       push(sentence: string) {
         if (!sentence.trim() || controller.signal.aborted) return;
-        pendingText.push(sentence);
-        pending.push(synthesize(sentence));   // synthesis starts immediately
+        let resolveResult!: (result: SynthesizedSentence) => void;
+        const result = new Promise<SynthesizedSentence>((resolve) => {
+          resolveResult = resolve;
+        });
+        jobs.push({
+          text: sentence.trim(),
+          result,
+          resolve: resolveResult,
+        });
+        if (interactive && voiceStateRef.current !== "inactive") {
+          setVoiceLatencyPhase("synthesizing");
+        }
+        startNextSynthesis();
         void playNext();
       },
       finish() {
         inputClosed = true;
-        if (!playing && playIndex >= pending.length) {
-          isPlayingRef.current = false;
-          onFinished?.();
+        if (!playing && playIndex >= jobs.length) {
+          finishOnce();
         } else {
           void playNext();
         }
@@ -655,8 +888,11 @@ export default function ChatPage() {
     if (!messageText.trim() || !activeSession || isLoading) return;
 
     const isVoiceActive = voiceStateRef.current !== "inactive";
+    setVoiceLatencyPhase("connecting");
+    setWaitElapsedSeconds(0);
     if (isVoiceActive) {
       setVoiceState("thinking");
+      stopVoiceAmplitude();
     }
 
     setIsLoading(true);
@@ -686,6 +922,15 @@ export default function ChatPage() {
       )
     );
 
+    const chatController = new AbortController();
+    chatAbortRef.current = chatController;
+    chatAbortReasonRef.current = null;
+    const chatDeadline = window.setTimeout(() => {
+      chatAbortReasonRef.current = "timeout";
+      chatController.abort();
+    }, CHAT_TURN_DEADLINE_MS);
+    let turnCompleted = false;
+
     try {
       const turnHistory = updatedMessages.slice(0, -1).map((m) => ({
         role: m.role,
@@ -706,6 +951,7 @@ export default function ChatPage() {
       const response = await fetch(`${API_BASE_URL}/api/v1/chat/stream`, {
         method: "POST",
         headers,
+        signal: chatController.signal,
         body: JSON.stringify({
           session_id: activeSession.id,
           message: messageText,
@@ -733,13 +979,19 @@ export default function ChatPage() {
       // Text appears as it is generated, and each completed sentence is sent
       // for synthesis immediately rather than after the whole answer.
       const shouldSpeak = readAloudEnabled || isVoiceActive;
-      const speaker = shouldSpeak ? createStreamingSpeaker(() => {
-        if (voiceStateRef.current === "speaking") setVoiceState("listening");
-      }) : null;
-
-      if (isVoiceActive) setVoiceState("speaking");
+      const speaker = shouldSpeak
+        ? createStreamingSpeaker(isVoiceActive, () => {
+            if (isVoiceActive && voiceStateRef.current !== "inactive") {
+              setVoiceLatencyPhase("idle");
+              setVoiceState("listening");
+            }
+          })
+        : null;
 
       const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error("The server returned an empty response stream.");
+      }
       const decoder = new TextDecoder();
       let buffer = "";
       let streamedText = "";
@@ -756,7 +1008,7 @@ export default function ChatPage() {
         )
       );
 
-      while (reader) {
+      while (true) {
         const { done, value } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
@@ -778,6 +1030,9 @@ export default function ChatPage() {
           }
 
           if (eventType === "delta") {
+            if (voiceStateRef.current === "thinking" || !isVoiceActive) {
+              setVoiceLatencyPhase("generating");
+            }
             streamedText += payload.text as string;
             setSessions((prev) =>
               prev.map((s) =>
@@ -794,6 +1049,13 @@ export default function ChatPage() {
             );
           } else if (eventType === "sentence") {
             speaker?.push(payload.text as string);
+          } else if (eventType === "status") {
+            const phase = payload.phase;
+            if (phase === "retrieving") {
+              setVoiceLatencyPhase("retrieving");
+            } else if (phase === "generating") {
+              setVoiceLatencyPhase("generating");
+            }
           } else if (eventType === "meta") {
             data = { ...data, ...payload };
           } else if (eventType === "done") {
@@ -867,9 +1129,29 @@ export default function ChatPage() {
             : s
         )
       );
+      turnCompleted = true;
 
     } catch (err: unknown) {
       console.error(err);
+      stopSpeaking();
+      const wasAborted =
+        err instanceof DOMException
+          ? err.name === "AbortError"
+          : err instanceof Error && err.name === "AbortError";
+      if (wasAborted && chatAbortReasonRef.current) {
+        if (chatAbortReasonRef.current === "interrupt") {
+          if (isVoiceActive) setVoiceState("listening");
+        } else {
+          if (isVoiceActive) setVoiceState("inactive");
+          setChatError(
+            classifyError(
+              null,
+              "The response timed out before the server completed it."
+            )
+          );
+        }
+        return;
+      }
       const message = err instanceof Error ? err.message : "Unknown error";
       const possibleStatus =
         err && typeof err === "object" && "status" in err
@@ -886,11 +1168,22 @@ export default function ChatPage() {
         )
       );
     } finally {
+      window.clearTimeout(chatDeadline);
+      if (chatAbortRef.current === chatController) {
+        chatAbortRef.current = null;
+      }
+      chatAbortReasonRef.current = null;
       setIsLoading(false);
+      setWaitElapsedSeconds(0);
+      if (!isVoiceActive) {
+        setVoiceLatencyPhase("idle");
+      }
       // Wait for graph extraction to actually finish, instead of guessing with
       // blind 5s and 12s timers that either fired too early or wasted a
       // request after the work was already done.
-      void waitForGraphExtraction(activeSession.id);
+      if (turnCompleted) {
+        void waitForGraphExtraction(activeSession.id);
+      }
     }
   };
 
@@ -969,11 +1262,16 @@ export default function ChatPage() {
               <div className="w-8 h-8 rounded-full bg-[var(--brand)] text-[var(--brand-text)] flex items-center justify-center font-medium text-[13px] flex-shrink-0">
                 AN
               </div>
-              <div className="px-4 py-3 rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-sm flex items-center gap-1.5">
-                <span className="typing-dot" />
-                <span className="typing-dot" />
-                <span className="typing-dot" />
-                <span className="sr-only">Andrew is composing a reply</span>
+              <div className="px-4 py-3 rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-sm flex items-center gap-3">
+                <span className="flex items-center gap-1.5" aria-hidden>
+                  <span className="typing-dot" />
+                  <span className="typing-dot" />
+                  <span className="typing-dot" />
+                </span>
+                <span className="text-[12px] text-[var(--text-muted)]">
+                  {waitingLabel}
+                  {waitElapsedSeconds >= 2 ? ` · ${waitElapsedSeconds}s` : ""}
+                </span>
               </div>
             </div>
           )}
@@ -1015,7 +1313,7 @@ export default function ChatPage() {
               for a pause rather than interrupting. */}
           <div aria-live="polite" aria-atomic="true" className="sr-only">
             {isLoading
-              ? "Andrew is composing a reply"
+              ? waitingLabel
               : lastMsg?.role === "assistant"
                 ? `Andrew replied: ${lastMsg.content.slice(0, 200)}`
                 : ""}
@@ -1033,7 +1331,16 @@ export default function ChatPage() {
           onChange={setUserInput}
           onSubmit={handleSendMessage}
           onToggleRecording={handleToggleRecording}
-          onStartVoice={() => setVoiceState("listening")}
+          onStartVoice={() => {
+            setVoiceProvider("preparing");
+            fetch(`${API_BASE_URL}/api/v1/chat/tts/status`)
+              .then((response) => (response.ok ? response.json() : null))
+              .then((status) =>
+                setVoiceProvider(status?.available ? "clone" : "browser")
+              )
+              .catch(() => setVoiceProvider("browser"));
+            setVoiceState("listening");
+          }}
           onOpenSettings={() => { setSettingsOpen(true); setMobilePanel("sessions"); }}
         />
       </main>
@@ -1063,23 +1370,32 @@ export default function ChatPage() {
       {voiceState !== "inactive" && (
         <VoiceOverlay
           voiceState={voiceState}
+          latencyPhase={voiceLatencyPhase}
+          voiceProvider={voiceProvider}
+          amplitude={voiceAmplitude}
           ttsSpeed={ttsSpeed}
           transcript={lastMsg?.role === "assistant" ? lastMsg.content : ""}
-          clonedVoiceAvailable={clonedVoiceAvailable}
           closeRef={voiceCloseRef}
           onExit={() => {
             stopSpeaking();
             setVoiceState("inactive");
           }}
           onInterrupt={() => {
-            if (voiceState === "speaking") {
+            if (voiceState === "listening") {
+              setVoiceState("inactive");
+            } else {
+              if (chatAbortRef.current) {
+                chatAbortReasonRef.current = "interrupt";
+                chatAbortRef.current.abort();
+              }
               stopSpeaking();
               setVoiceState("listening");
-            } else if (voiceState === "listening") {
-              setVoiceState("inactive");
             }
           }}
-          onMute={stopSpeaking}
+          onMute={() => {
+            stopSpeaking();
+            setVoiceState("listening");
+          }}
           onSpeedDown={() => setTtsSpeed((prev) => Math.max(0.8, prev - 0.1))}
           onSpeedUp={() => setTtsSpeed((prev) => Math.min(1.5, prev + 0.1))}
         />

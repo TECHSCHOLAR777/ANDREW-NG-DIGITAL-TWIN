@@ -59,6 +59,15 @@ export interface ChatSession {
 }
 
 export type VoiceState = "inactive" | "listening" | "thinking" | "speaking"
+export type VoiceLatencyPhase =
+  | "idle"
+  | "connecting"
+  | "retrieving"
+  | "generating"
+  | "synthesizing"
+  | "playing"
+  | "fallback"
+export type VoiceProvider = "preparing" | "clone" | "browser"
 
 // ── Browser speech-recognition typings (no DOM lib guarantee across targets) ──
 export type SpeechRecognitionConstructor = new () => SpeechRecognitionLike

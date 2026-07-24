@@ -58,6 +58,7 @@ type Point = {
   delay: number
   phase: number
   mouth: boolean
+  mouthSide: number
   ma: number // matte alpha 0..1 (silhouette feather)
   by: number // lower-body dissolution 0..1
   lum: number
@@ -214,12 +215,13 @@ export function AndrewPortrait({
           const rel = Math.hypot(tx - cx, ty - cy) / (diag / 2)
           const delay = clamp01(rel) * 0.5 + rnd() * 0.12
 
-          // Mouth region for voice: lower-central band of the FACE (upper part
-          // of the subject), used only for a subtle amplitude reaction.
-          const mouth =
-            fy > 0.26 &&
-            fy < 0.42 &&
-            Math.abs(px - drawW * 0.5) < drawW * 0.18
+          // The source portrait's mouth is left of the image centre because
+          // Andrew is turned slightly. An ellipse tied to image coordinates
+          // keeps speech motion on the lips instead of moving half the face.
+          const mouthX = (px / drawW - 0.465) / 0.105
+          const mouthY = (py / drawH - 0.425) / 0.052
+          const mouth = mouthX * mouthX + mouthY * mouthY <= 1
+          const mouthSide = clamp01((mouthY + 1) / 2) * 2 - 1
 
           // Luminance shapes the particle; a floor keeps dark features present.
           const r = MIN_RADIUS + lum * (maxRadius - MIN_RADIUS)
@@ -233,6 +235,7 @@ export function AndrewPortrait({
             delay,
             phase: (gx + gy) * 0.35 + rnd(),
             mouth,
+            mouthSide,
             ma,
             by: clamp01(by),
             lum,
@@ -251,7 +254,7 @@ export function AndrewPortrait({
       if (settleAll >= 1 && continuous) {
         x += Math.sin(t + p.phase) * 0.9
         if (mode === "voice" && p.mouth)
-          x += Math.sin(t * 8 + p.phase) * ampRef.current * 3
+          x += Math.sin(t * 13 + p.phase) * ampRef.current * 0.8
       }
       return x
     }
@@ -262,8 +265,12 @@ export function AndrewPortrait({
       let y = p.sy + (p.ty - p.sy) * local
       if (settleAll >= 1 && continuous) {
         y += Math.cos(t + p.phase) * 0.9
-        if (mode === "voice" && p.mouth)
-          y += Math.cos(t * 8 + p.phase) * ampRef.current * 3
+        if (mode === "voice" && p.mouth) {
+          const jawDirection = p.mouthSide >= 0 ? 1 : -1
+          y +=
+            jawDirection * ampRef.current * 2.4 +
+            Math.cos(t * 13 + p.phase) * ampRef.current * 0.7
+        }
       }
       return y
     }
@@ -322,6 +329,9 @@ export function AndrewPortrait({
       }
 
       // ── Dots: warm-white, tone by luminance, floor keeps dark features ──
+      const dotBrand = mode === "voice" && ampRef.current > 0.04
+        ? brandRGB()
+        : ""
       for (const p of points) {
         if (p.r === 0) continue
         const local = animate
@@ -332,9 +342,16 @@ export function AndrewPortrait({
         const tone = Math.max(0.34, 0.32 + p.lum * 0.62)
         const a = tone * p.ma * p.by * local
         if (a <= 0.01) continue
+        const speakingMouth =
+          mode === "voice" && p.mouth && ampRef.current > 0.04
+        const radius = speakingMouth
+          ? p.r * (1 + ampRef.current * 0.45)
+          : p.r
         ctx!.beginPath()
-        ctx!.arc(x, y, p.r, 0, Math.PI * 2)
-        ctx!.fillStyle = `rgba(236,234,230,${a})`
+        ctx!.arc(x, y, radius, 0, Math.PI * 2)
+        ctx!.fillStyle = speakingMouth
+          ? `rgba(${dotBrand},${Math.min(1, a + ampRef.current * 0.3)})`
+          : `rgba(236,234,230,${a})`
         ctx!.fill()
       }
     }
@@ -456,7 +473,8 @@ export function AndrewPortrait({
 }
 
 const EMPTY: Point = {
-  tx: -1, ty: -1, sx: -1, sy: -1, r: 0, delay: 0, phase: 0, mouth: false, ma: 0, by: 0, lum: 0,
+  tx: -1, ty: -1, sx: -1, sy: -1, r: 0, delay: 0, phase: 0,
+  mouth: false, mouthSide: 0, ma: 0, by: 0, lum: 0,
 }
 
 /** Read the resolved --brand as "r,g,b" for canvas fill. */
