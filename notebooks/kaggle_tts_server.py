@@ -41,9 +41,9 @@ HOW TO USE
 WHAT TO EXPECT
 ──────────────
 * First run downloads the model, a few minutes.
-* Synthesis on a T4 is roughly 1 to 3 seconds per sentence, so with the
-  sentence streaming already in place the first audio arrives in a couple of
-  seconds rather than tens.
+* The server uses Chatterbox Turbo, the low-latency English voice-agent model,
+  and prepares Andrew's reference conditioning once at startup instead of
+  re-encoding it for every sentence.
 * Kaggle sessions expire after about 9 hours and the tunnel URL changes each
   time you restart. This is a development and demo setup, not production.
 * The notebook tab must stay open. Kaggle stops idle sessions.
@@ -143,7 +143,7 @@ if not os.path.exists(REFERENCE_AUDIO_PATH):
 # MODEL
 # ─────────────────────────────────────────────────────────────────────────────
 import torch
-from chatterbox.tts import ChatterboxTTS
+from chatterbox.tts_turbo import ChatterboxTurboTTS
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 if DEVICE == "cpu":
@@ -152,9 +152,11 @@ if DEVICE == "cpu":
 else:
     print(f"GPU: {torch.cuda.get_device_name(0)}")
 
-print("Loading Chatterbox...")
-MODEL = ChatterboxTTS.from_pretrained(device=DEVICE)
-print("Model ready.")
+print("Loading Chatterbox Turbo...")
+MODEL = ChatterboxTurboTTS.from_pretrained(device=DEVICE)
+print("Preparing Andrew voice conditioning...")
+MODEL.prepare_conditionals(REFERENCE_AUDIO_PATH)
+print("Turbo model and Andrew voice are ready.")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SERVER
@@ -162,12 +164,14 @@ print("Model ready.")
 # backend cannot tell the difference between local and remote.
 # ─────────────────────────────────────────────────────────────────────────────
 import io
+import threading
 import soundfile as sf
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
 
 app = FastAPI(title="Chatterbox TTS (Kaggle GPU)")
+MODEL_LOCK = threading.Lock()
 
 
 class SpeechRequest(BaseModel):
@@ -184,6 +188,7 @@ def health():
         "device": DEVICE,
         "watermarking": WATERMARKING,
         "voice": "andrew_ng_ref",
+        "model": "chatterbox-turbo",
     }
 
 
@@ -195,17 +200,13 @@ def speech(req: SpeechRequest):
 
     started = time.time()
     try:
-        kwargs = {"audio_prompt_path": REFERENCE_AUDIO_PATH}
-        # Speed is applied at synthesis, never by resampling finished audio,
-        # which would shift pitch and formants and undo the point of cloning.
-        if abs(req.speed - 1.0) > 0.01:
-            try:
-                kwargs["cfg_weight"] = max(0.2, min(1.0, 0.5 / req.speed))
-                wav = MODEL.generate(text, **kwargs)
-            except TypeError:
-                wav = MODEL.generate(text, audio_prompt_path=REFERENCE_AUDIO_PATH)
-        else:
-            wav = MODEL.generate(text, **kwargs)
+        # Chatterbox uses one GPU model instance. Serialising generation avoids
+        # concurrent sentence requests competing for VRAM and making every
+        # sentence slower.
+        with MODEL_LOCK:
+            # Voice conditioning was prepared once at startup. Passing the
+            # reference path here would encode it again for every sentence.
+            wav = MODEL.generate(text)
 
         buffer = io.BytesIO()
         sf.write(buffer, wav.squeeze(0).cpu().numpy(), MODEL.sr,
