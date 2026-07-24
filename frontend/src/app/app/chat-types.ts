@@ -10,8 +10,11 @@ export const KEY_LOCAL_STORAGE_GEMINI = "andrew_ng_byok_key"
 export const KEY_LOCAL_STORAGE_TENANT = "andrew_ng_tenant_uuid"
 export const KEY_LOCAL_STORAGE_ACTIVE = "andrew_ng_active_session"
 
-export const API_BASE_URL =
+// Strip trailing slash so callers can safely write `${API_BASE_URL}/api/...`
+// without producing double-slash URLs when the env var was set with one.
+export const API_BASE_URL = (
   process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000"
+).replace(/\/$/, "")
 
 // Shown on an untouched conversation. Concrete questions teach what the twin is
 // for far faster than any description.

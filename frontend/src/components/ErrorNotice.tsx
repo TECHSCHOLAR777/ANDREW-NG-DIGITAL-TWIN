@@ -116,9 +116,15 @@ export function ErrorNotice({ error, onRetry, onOpenSettings, onDismiss }: Props
           </p>
         )}
         {error.kind === "offline" && (
-          <p className="mt-1 opacity-90 font-mono text-[12px]">
-            python -m uvicorn backend.app.main:app --reload
-          </p>
+          process.env.NEXT_PUBLIC_API_BASE_URL ? (
+            <p className="mt-1 opacity-90 text-[12px]">
+              The backend may be waking from sleep. Wait a moment, then try again.
+            </p>
+          ) : (
+            <p className="mt-1 opacity-90 font-mono text-[12px]">
+              python -m uvicorn backend.app.main:app --reload
+            </p>
+          )
         )}
         {error.kind === "rate_limit" && countdown > 0 && (
           <p className="mt-1 opacity-90">Try again in {countdown}s.</p>
