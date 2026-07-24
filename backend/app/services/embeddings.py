@@ -219,6 +219,10 @@ def _voyage_encode(texts: list[str], api_key: str, task_type: str) -> list[list[
 # JINA PROVIDER
 # ─────────────────────────────────────────────────────────────────────────────
 JINA_URL = "https://api.jina.ai/v1/embeddings"
+# Jina has its own auth separate from the BYOK Gemini key. The runtime path
+# passes the user's Gemini key as `api_key`, which doesn't work with Jina;
+# read the real key from the environment instead.
+_JINA_API_KEY = os.getenv("JINA_API_KEY", "")
 
 
 def _jina_encode(texts: list[str], api_key: str, task_type: str) -> list[list[float]]:
@@ -228,7 +232,8 @@ def _jina_encode(texts: list[str], api_key: str, task_type: str) -> list[list[fl
     Free tier: 10M tokens, no card required. 100 RPM / 100K TPM.
     No batch size limit. 1024-dim default, asymmetric retrieval.
     """
-    if not api_key:
+    key = _JINA_API_KEY or api_key
+    if not key:
         raise EmbeddingError(
             "EMBED_PROVIDER=jina needs JINA_API_KEY. Get one free (no card) at jina.ai."
         )
@@ -246,7 +251,7 @@ def _jina_encode(texts: list[str], api_key: str, task_type: str) -> list[list[fl
     try:
         resp = httpx.post(
             JINA_URL,
-            headers={"Authorization": f"Bearer {api_key}"},
+            headers={"Authorization": f"Bearer {key}"},
             json=payload,
             timeout=120.0,
         )
