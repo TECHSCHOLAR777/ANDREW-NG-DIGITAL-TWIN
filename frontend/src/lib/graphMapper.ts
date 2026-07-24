@@ -29,6 +29,8 @@ import { NODE_TYPE_COLORS, PREDICATE_COLORS } from "../types/graph";
 // ── Layout constants ──────────────────────────────────────────────────────────
 const LAYOUT_WIDTH  = 800;
 const LAYOUT_HEIGHT = 600;
+const NODE_WIDTH    = 168;
+const NODE_HEIGHT   = 68;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN MAPPER FUNCTION
@@ -164,7 +166,7 @@ function buildCombinedEdge(group: EdgeRow[]): KnowledgeEdge {
   
   // Combine weights: use the maximum weight
   const maxWeight = Math.max(...group.map((e) => e.weight));
-  const strokeWidth = Math.max(1, Math.min(maxWeight * 2.5, 6));
+  const strokeWidth = Math.max(1.5, Math.min(1.1 + maxWeight * 1.2, 3.5));
 
   // Combine predicates into a deduplicated label
   const uniquePredicates = Array.from(new Set(group.map((e) => e.predicate)));
@@ -181,28 +183,29 @@ function buildCombinedEdge(group: EdgeRow[]): KnowledgeEdge {
     animated: isAnimated,
     label:  combinedLabel,
     labelStyle: {
-      fontSize:   "11px",
+      fontSize:   "10px",
       fontWeight: "600",
-      fill:       "var(--graph-node-muted)",
+      fill:       edgeColor,
     },
+    labelBgPadding: [6, 4],
+    labelBgBorderRadius: 5,
     labelBgStyle: {
       fill:        "var(--surface)",
-      fillOpacity: 0.95,
-      stroke:      "var(--border)",
+      fillOpacity: 0.97,
+      stroke:      edgeColor,
+      strokeOpacity: 0.32,
       strokeWidth: 1,
-      rx:          4,
-      ry:          4,
     },
     style: {
       stroke:      edgeColor,
       strokeWidth,
-      opacity:     0.8,
+      opacity:     0.88,
     },
     markerEnd: {
       type:  "arrowclosed",
       color: edgeColor,
-      width: 12,
-      height: 12,
+      width: 14,
+      height: 14,
     },
     data: {
       predicate: primary.predicate,
@@ -239,16 +242,21 @@ function applyForceLayout(
   type SimNode = d3.SimulationNodeDatum & {
     id:          string;
     hopDistance: number;
-    size:        number;
   };
 
-  const simNodes: SimNode[] = nodes.map((n) => ({
-    id:          n.id,
-    hopDistance: n.data.hopDistance,
-    size:        parseFloat(String(n.style?.width ?? 50)),
-    x:           width / 2 + (Math.random() - 0.5) * 100,
-    y:           height / 2 + (Math.random() - 0.5) * 100,
-  }));
+  const simNodes: SimNode[] = nodes.map((n, index) => {
+    const hash = stableHash(n.id);
+    const angle =
+      (index / Math.max(nodes.length, 1)) * Math.PI * 2 +
+      ((hash % 31) / 31) * 0.35;
+    const radius = 64 + (hash % 36);
+    return {
+      id:          n.id,
+      hopDistance: n.data.hopDistance,
+      x:           width / 2 + Math.cos(angle) * radius,
+      y:           height / 2 + Math.sin(angle) * radius,
+    };
+  });
 
   const nodeById = new Map(simNodes.map((n) => [n.id, n]));
 
@@ -302,7 +310,13 @@ function applyForceLayout(
   return nodes.map((n) => {
     const simNode = nodeById.get(n.id);
     return simNode
-      ? { ...n, position: { x: simNode.x ?? 0, y: simNode.y ?? 0 } }
+      ? {
+          ...n,
+          position: {
+            x: (simNode.x ?? width / 2) - NODE_WIDTH / 2,
+            y: (simNode.y ?? height / 2) - NODE_HEIGHT / 2,
+          },
+        }
       : n;
   });
 }
@@ -318,6 +332,19 @@ function applyForceLayout(
  * Convert predicate snake_case to readable label.
  * e.g. "struggles_with" → "struggles with"
  */
+/**
+ * FNV-1a hash used only to seed layout positions. Stable input coordinates
+ * make the force simulation repeatable across refreshes and scope switches.
+ */
+function stableHash(value: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
 function formatPredicate(predicate: string): string {
   return predicate.replace(/_/g, " ");
 }

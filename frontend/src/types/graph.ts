@@ -91,42 +91,51 @@ export interface KnowledgeGraph {
 // ── Visual style config ───────────────────────────────────────────────────────
 
 /**
- * The Context Graph is mostly monochrome: every node type resolves to the same
- * graphite token, and categories are told apart by their label and icon rather
- * than colour. Orange is reserved for the selected node and active paths, and
- * is applied in the view rather than baked in here. Token-driven so both themes
- * work. Kept exhaustive over NodeType.
+ * A restrained semantic palette. Closely related categories intentionally
+ * share a colour so the graph stays readable instead of becoming a rainbow.
+ * The tokens provide separate light/dark values and this map remains exhaustive
+ * over NodeType.
  */
 export const NODE_TYPE_COLORS: Record<NodeType, string> = {
-  Student:      "var(--graph-node)",
-  Concept:      "var(--graph-node)",
-  Project:      "var(--graph-node)",
-  Tool:         "var(--graph-node)",
-  Paper:        "var(--graph-node)",
-  Person:       "var(--graph-node)",
-  Organization: "var(--graph-node)",
-  Industry:     "var(--graph-node)",
-  Goal:         "var(--graph-node)",
-  Preference:   "var(--graph-node)",
-  ResearchArea: "var(--graph-node)",
+  Student:      "var(--graph-person)",
+  Person:       "var(--graph-person)",
+  Concept:      "var(--graph-concept)",
+  ResearchArea: "var(--graph-concept)",
+  Project:      "var(--graph-project)",
+  Tool:         "var(--graph-project)",
+  Organization: "var(--graph-organization)",
+  Industry:     "var(--graph-organization)",
+  Goal:         "var(--graph-intention)",
+  Preference:   "var(--graph-intention)",
+  Paper:        "var(--graph-paper)",
 };
 
 /**
- * Edges are monochrome as well. The predicate is carried by its label, not by a
- * rainbow of colours, so every edge uses the same graphite edge token.
+ * Relationship colours describe the kind of connection: learning state,
+ * curiosity, professional context, identity, or neutral structure.
  */
 export const PREDICATE_COLORS: Record<string, string> = {
-  struggles_with:   "var(--graph-edge)",
-  mastered:         "var(--graph-edge)",
-  curious_about:    "var(--graph-edge)",
-  works_in:         "var(--graph-edge)",
-  studied:          "var(--graph-edge)",
-  applied:          "var(--graph-edge)",
-  confused_about:   "var(--graph-edge)",
-  wants_to_learn:   "var(--graph-edge)",
+  struggles_with:   "var(--graph-edge-challenge)",
+  confused_about:   "var(--graph-edge-challenge)",
+  concerned_about:  "var(--graph-edge-challenge)",
+  mastered:         "var(--graph-edge-progress)",
+  curious_about:    "var(--graph-edge-curiosity)",
+  wants_to_learn:   "var(--graph-edge-curiosity)",
+  interested_in:    "var(--graph-edge-curiosity)",
+  researches:       "var(--graph-edge-curiosity)",
+  works_in:         "var(--graph-edge-work)",
+  works_at:         "var(--graph-edge-work)",
+  leads:            "var(--graph-edge-work)",
+  building:         "var(--graph-edge-work)",
+  collaborates_on:  "var(--graph-edge-work)",
+  studied:          "var(--graph-edge-application)",
+  applied:          "var(--graph-edge-application)",
+  used_in:          "var(--graph-edge-application)",
+  discussed:        "var(--graph-edge-application)",
+  named:            "var(--graph-edge-identity)",
+  is:               "var(--graph-edge-identity)",
+  prefers:          "var(--graph-edge-intention)",
+  decided:          "var(--graph-edge-intention)",
   has_prerequisite: "var(--graph-edge)",
   related_to:       "var(--graph-edge)",
-  used_in:          "var(--graph-edge)",
-  named:            "var(--graph-edge)",
-  is:               "var(--graph-edge)",
 };

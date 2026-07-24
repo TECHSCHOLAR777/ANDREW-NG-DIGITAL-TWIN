@@ -72,6 +72,19 @@
   --graph-node-anchor: #171614;
   --graph-edge:        rgba(23, 22, 20, 0.22);
   --graph-active:      #E8620E;
+  --graph-person:      #C65312;
+  --graph-concept:     #2563B8;
+  --graph-project:     #7650B3;
+  --graph-organization:#08766E;
+  --graph-intention:   #B83265;
+  --graph-paper:       #4F6175;
+  --graph-edge-challenge:   #C2413B;
+  --graph-edge-progress:    #16845B;
+  --graph-edge-curiosity:   #2563B8;
+  --graph-edge-work:        #7650B3;
+  --graph-edge-application: #08766E;
+  --graph-edge-identity:    #C65312;
+  --graph-edge-intention:   #B83265;
 
   /* Focus */
   --focus:         var(--brand);
@@ -169,6 +182,19 @@
     --graph-node-anchor: #F4F3EF;
     --graph-edge:        rgba(255, 255, 255, 0.18);
     --graph-active:      #FF7A1A;
+    --graph-person:      #FF9A4A;
+    --graph-concept:     #70A8FF;
+    --graph-project:     #B89AF4;
+    --graph-organization:#45D0C2;
+    --graph-intention:   #F48AB5;
+    --graph-paper:       #A9B7C8;
+    --graph-edge-challenge:   #FF8580;
+    --graph-edge-progress:    #55D6A0;
+    --graph-edge-curiosity:   #70A8FF;
+    --graph-edge-work:        #B89AF4;
+    --graph-edge-application: #45D0C2;
+    --graph-edge-identity:    #FF9A4A;
+    --graph-edge-intention:   #F48AB5;
   }
 }
 
@@ -218,6 +244,19 @@
   --graph-node-anchor: #F4F3EF;
   --graph-edge:        rgba(255, 255, 255, 0.18);
   --graph-active:      #FF7A1A;
+  --graph-person:      #FF9A4A;
+  --graph-concept:     #70A8FF;
+  --graph-project:     #B89AF4;
+  --graph-organization:#45D0C2;
+  --graph-intention:   #F48AB5;
+  --graph-paper:       #A9B7C8;
+  --graph-edge-challenge:   #FF8580;
+  --graph-edge-progress:    #55D6A0;
+  --graph-edge-curiosity:   #70A8FF;
+  --graph-edge-work:        #B89AF4;
+  --graph-edge-application: #45D0C2;
+  --graph-edge-identity:    #FF9A4A;
+  --graph-edge-intention:   #F48AB5;
 }
 
 body {

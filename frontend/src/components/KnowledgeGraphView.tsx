@@ -26,6 +26,7 @@ import {
   Handle,
   Position,
   BackgroundVariant,
+  ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { List, Network, RotateCcw, Sparkles, Trash2, X } from "lucide-react";
@@ -37,6 +38,7 @@ import type {
   KnowledgeNode,
   KnowledgeEdge,
 } from "../types/graph";
+import { NODE_TYPE_COLORS } from "../types/graph";
 
 // A signed-in user's self node arrives typed "Student"; the product shows it
 // as a person, not a learner.
@@ -68,21 +70,23 @@ function usePrefersReducedMotion(): boolean {
 // ─────────────────────────────────────────────────────────────────────────────
 const KnowledgeNodeComponent: React.FC<NodeProps<KnowledgeNode>> = ({ data, selected }) => {
   const isAnchor = data.hopDistance === 0;
+  const typeColor = NODE_TYPE_COLORS[data.nodeType] ?? "var(--graph-paper)";
+
   return (
     <div
       style={{
         width: 168,
-        minHeight: 60,
+        minHeight: 68,
         borderRadius: 12,
-        background: "var(--surface)",
+        background: `color-mix(in srgb, ${typeColor} 8%, var(--surface))`,
         border: selected
           ? "1.5px solid var(--brand)"
           : isAnchor
-            ? "1.5px solid var(--graph-node-anchor)"
-            : "1px solid var(--border)",
+            ? `1.5px solid ${typeColor}`
+            : `1px solid color-mix(in srgb, ${typeColor} 42%, var(--border))`,
         boxShadow: selected
           ? "0 0 0 3px var(--brand-soft), 0 4px 12px rgba(0,0,0,0.10)"
-          : "0 2px 6px rgba(0,0,0,0.06)",
+          : `inset 3px 0 0 ${typeColor}, 0 5px 16px rgba(0,0,0,0.09)`,
         display: "flex",
         flexDirection: "column",
         gap: 4,
@@ -97,12 +101,25 @@ const KnowledgeNodeComponent: React.FC<NodeProps<KnowledgeNode>> = ({ data, sele
 
       <span
         style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
           fontSize: 11,
-          fontWeight: 600,
-          color: selected ? "var(--brand)" : "var(--text-subtle)",
-          letterSpacing: "0.04em",
+          fontWeight: 650,
+          color: selected ? "var(--brand)" : typeColor,
+          letterSpacing: "0.045em",
         }}
       >
+        <span
+          aria-hidden="true"
+          style={{
+            width: 6,
+            height: 6,
+            borderRadius: "9999px",
+            background: selected ? "var(--brand)" : typeColor,
+            boxShadow: `0 0 0 3px color-mix(in srgb, ${typeColor} 14%, transparent)`,
+          }}
+        />
         {displayCategory(data.nodeType)}
       </span>
       <span
@@ -297,10 +314,39 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
   const [rfEdges, setEdges, onEdgesChange] = useEdgesState<KnowledgeEdge>([]);
   const [selectedNode, setSelectedNode] = useState<KnowledgeNode | null>(null);
   const [listView, setListView] = useState(false);
+  const [layoutVersion, setLayoutVersion] = useState(0);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const reactFlowRef = useRef<ReactFlowInstance<KnowledgeNode, KnowledgeEdge> | null>(null);
+  const fitFrameRef = useRef<number | null>(null);
   const prevGraphRef = useRef<{ nodes: KnowledgeNode[]; edges: KnowledgeEdge[] }>({
     nodes: [],
     edges: [],
   });
+
+  const scheduleFitView = useCallback(() => {
+    if (fitFrameRef.current !== null) {
+      window.cancelAnimationFrame(fitFrameRef.current);
+    }
+    fitFrameRef.current = window.requestAnimationFrame(() => {
+      fitFrameRef.current = null;
+      void reactFlowRef.current?.fitView({
+        padding: 0.18,
+        minZoom: 0.25,
+        maxZoom: 1.15,
+        duration: reducedMotion ? 0 : 320,
+        interpolate: "smooth",
+      });
+    });
+  }, [reducedMotion]);
+
+  useEffect(
+    () => () => {
+      if (fitFrameRef.current !== null) {
+        window.cancelAnimationFrame(fitFrameRef.current);
+      }
+    },
+    []
+  );
 
   useEffect(() => {
     if (triplets.length === 0) {
@@ -310,8 +356,12 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
       prevGraphRef.current = { nodes: [], edges: [] };
       return;
     }
-    const numWidth = typeof width === "number" ? width : 800;
-    const numHeight = typeof height === "number" ? height : 600;
+    const measuredWidth = containerRef.current?.clientWidth ?? 0;
+    const measuredHeight = containerRef.current?.clientHeight ?? 0;
+    const numWidth =
+      typeof width === "number" ? width : Math.max(measuredWidth, 640);
+    const numHeight =
+      typeof height === "number" ? height : Math.max(measuredHeight, 560);
     const newGraph = mapTripletRowsToReactFlow(triplets, edges, numWidth, numHeight);
     // Reduced motion: no travelling edge animation.
     if (reducedMotion) {
@@ -321,7 +371,36 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
     setNodes(merged.nodes);
     setEdges(merged.edges);
     prevGraphRef.current = merged;
+    setLayoutVersion((version) => version + 1);
   }, [triplets, edges, width, height, reducedMotion, setNodes, setEdges]);
+
+  useEffect(() => {
+    if (layoutVersion > 0 && !listView) {
+      scheduleFitView();
+    }
+  }, [layoutVersion, listView, scheduleFitView]);
+
+  useEffect(() => {
+    const element = containerRef.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+
+    let previousWidth = element.clientWidth;
+    let previousHeight = element.clientHeight;
+    const observer = new ResizeObserver(([entry]) => {
+      const { width: nextWidth, height: nextHeight } = entry.contentRect;
+      const changed =
+        Math.abs(nextWidth - previousWidth) > 3 ||
+        Math.abs(nextHeight - previousHeight) > 3;
+      previousWidth = nextWidth;
+      previousHeight = nextHeight;
+      if (changed && !listView && prevGraphRef.current.nodes.length > 0) {
+        scheduleFitView();
+      }
+    });
+
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [listView, scheduleFitView]);
 
   const onNodeClick = useCallback((_: React.MouseEvent, node: KnowledgeNode) => {
     setSelectedNode((prev) => (prev?.id === node.id ? null : node));
@@ -341,7 +420,10 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
   );
 
   return (
-    <div style={{ width: width ?? "100%", height: height ?? "100%", background: "var(--surface)", overflow: "hidden", position: "relative" }}>
+    <div
+      ref={containerRef}
+      style={{ width: width ?? "100%", height: height ?? "100%", background: "var(--surface)", overflow: "hidden", position: "relative" }}
+    >
       {/* Loading — theme-aware, never a white overlay */}
       {isLoading && (
         <div
@@ -449,9 +531,12 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onNodeClick={onNodeClick}
+          onInit={(instance) => {
+            reactFlowRef.current = instance;
+            scheduleFitView();
+          }}
           nodeTypes={NODE_TYPES}
-          fitView
-          fitViewOptions={{ padding: 0.2 }}
+          fitViewOptions={{ padding: 0.18, minZoom: 0.25, maxZoom: 1.15 }}
           minZoom={0.3}
           maxZoom={2.5}
           proOptions={{ hideAttribution: true }}
@@ -462,7 +547,13 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
           {nodes.length > 8 && (
             <MiniMap
               style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
-              nodeColor="var(--graph-node-muted)"
+              nodeColor={(node) =>
+                NODE_TYPE_COLORS[
+                  (node.data as KnowledgeNode["data"]).nodeType
+                ] ?? "var(--graph-paper)"
+              }
+              nodeStrokeColor="var(--surface)"
+              nodeStrokeWidth={2}
               maskColor="var(--surface-glass)"
             />
           )}
