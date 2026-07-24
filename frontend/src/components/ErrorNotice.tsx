@@ -51,16 +51,19 @@ export function classifyError(status: number | null, detail: string): ChatError 
       retryAfterSeconds: match ? parseInt(match[1], 10) : 30,
     };
   }
-  if (status === null || text.includes("failed to fetch") || text.includes("networkerror")) {
+  // True network failures: fetch() threw before getting any response.
+  // SSE stream errors arrive as error events with an actual error string,
+  // so they fall through to "server" below rather than showing "offline".
+  if (text.includes("failed to fetch") || text.includes("networkerror") || text.includes("load failed")) {
     return {
       kind: "offline",
       message: "Could not reach the server. Check your connection.",
     };
   }
-  if (status && status >= 500) {
+  if (status === null || (status && status >= 500)) {
     return {
       kind: "server",
-      message: "The server ran into a problem handling that.",
+      message: "The server ran into a problem. Try again in a moment.",
     };
   }
   return { kind: "unknown", message: detail || "Something went wrong." };
