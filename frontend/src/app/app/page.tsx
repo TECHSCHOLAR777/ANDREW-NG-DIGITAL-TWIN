@@ -744,7 +744,8 @@ export default function ChatPage() {
       let buffer = "";
       let streamedText = "";
       let data: Record<string, unknown> = {};
-      let streamError: string | null = null;
+      let streamErrorDetail: string | null = null;
+      let streamErrorStatus: number | null = null;
 
       // Placeholder assistant message that fills in as deltas arrive
       setSessions((prev) =>
@@ -798,13 +799,24 @@ export default function ChatPage() {
           } else if (eventType === "done") {
             data = { ...data, ...payload };
           } else if (eventType === "error") {
-            streamError = payload.detail as string;
+            streamErrorDetail =
+              typeof payload.detail === "string"
+                ? payload.detail
+                : "The AI service could not complete this request.";
+            streamErrorStatus =
+              typeof payload.status === "number" ? payload.status : null;
           }
         }
       }
 
       speaker?.finish();
-      if (streamError) throw new Error(streamError);
+      if (streamErrorDetail) {
+        const error = new Error(streamErrorDetail) as Error & {
+          status?: number | null;
+        };
+        error.status = streamErrorStatus;
+        throw error;
+      }
 
       const assistantText = (data.assistant_message as string) || streamedText;
       const rawGraph: GraphContextNode[] = (data.graph_context as GraphContextNode[]) || [];
@@ -859,9 +871,15 @@ export default function ChatPage() {
     } catch (err: unknown) {
       console.error(err);
       const message = err instanceof Error ? err.message : "Unknown error";
+      const possibleStatus =
+        err && typeof err === "object" && "status" in err
+          ? (err as { status?: unknown }).status
+          : null;
+      const status = typeof possibleStatus === "number" ? possibleStatus : null;
       if (isVoiceActive) setVoiceState("inactive");
-      // A network failure has no HTTP status, which classifyError reads as offline.
-      setChatError(classifyError(null, message));
+      // A network failure has no HTTP status; SSE failures carry the status
+      // supplied by the backend in their final error frame.
+      setChatError(classifyError(status, message));
       setSessions((prev) =>
         prev.map((s) =>
           s.id === activeSession.id ? { ...s, messages: activeSession.messages } : s

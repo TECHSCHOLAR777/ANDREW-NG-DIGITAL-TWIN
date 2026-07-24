@@ -37,6 +37,18 @@ export function classifyError(status: number | null, detail: string): ChatError 
       message: "Add your Gemini API key in Settings to start chatting.",
     };
   }
+  if (
+    status === 403 ||
+    text.includes("rejected this api key") ||
+    text.includes("api key not valid") ||
+    text.includes("api_key_invalid") ||
+    text.includes("invalid api key")
+  ) {
+    return {
+      kind: "config",
+      message: "This Gemini API key was rejected. Check it in Settings and try again.",
+    };
+  }
   if (status === 401) {
     return {
       kind: "auth",
