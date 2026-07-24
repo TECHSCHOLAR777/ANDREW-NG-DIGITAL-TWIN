@@ -42,10 +42,12 @@ from .model_config import GENERATION_MODEL, legacy_cache_model_name
 logger = logging.getLogger(__name__)
 
 # Per-turn-kind budgets. See services/routing.py for how turn_kind is decided.
-# Greetings and follow-ups do not need deep reasoning; teaching a new concept
-# does. Spending the same budget on every turn made the fast cases slow.
-_THINKING_BUDGETS = {"greeting": 0, "followup": 512, "opinion": 1024, "concept": 2048}
-_OUTPUT_BUDGETS   = {"greeting": 512, "followup": 1536, "opinion": 2048, "concept": 3072}
+# Gemini 3.6 maps budgets below 1536 to its low-latency thinking level. The
+# tutoring pipeline already supplies retrieved evidence, learner state and a
+# teaching structure, so routine concept explanations do not benefit enough
+# from medium thinking to justify the extra first-token delay.
+_THINKING_BUDGETS = {"greeting": 0, "followup": 512, "opinion": 1024, "concept": 1024}
+_OUTPUT_BUDGETS   = {"greeting": 384, "followup": 1024, "opinion": 1536, "concept": 2048}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ANDREW NG PERSONA PROMPT (static — perfect for caching)

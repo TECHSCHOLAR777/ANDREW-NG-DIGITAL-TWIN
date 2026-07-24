@@ -24,7 +24,9 @@ import uuid
 import re
 import os
 import hashlib
+import time
 from collections import deque
+from contextlib import suppress
 from typing import Annotated, Literal
 
 import asyncpg
@@ -58,6 +60,8 @@ _cache_managers: dict[str, PromptCacheManager] = {}
 MAX_TTS_CHARS = int(os.getenv("MAX_TTS_CHARS", "1200"))
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development").lower()
 CHATTERBOX_URL = os.getenv("CHATTERBOX_URL", "http://127.0.0.1:5002/v1/audio/speech")
+_TTS_QUEUE_WAIT_SECONDS = 3.0
+_tts_synthesis_lock = asyncio.Lock()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -750,14 +754,48 @@ async def chat_message_stream(
     turn_id    = uuid.uuid4()
     sess_uuid  = _coerce_session_uuid(body.session_id)
 
-    # A guest tenant exists only in browser storage until the first message.
-    # Create it before the stream starts so persistence cannot violate the
-    # chat_sessions tenant foreign key after tokens have already been emitted.
-    await _ensure_tenant(db, tenant_id)
-
     async def event_stream():
+        started_at = time.perf_counter()
+        prepare_task: asyncio.Task | None = None
+        pending_fragment: asyncio.Task | None = None
+
+        def elapsed_ms() -> int:
+            return round((time.perf_counter() - started_at) * 1000)
+
         try:
-            ctx = await _prepare_turn(db, body, tenant_id, gemini_key)
+            # Flush the response immediately. On Render cold starts and slower
+            # retrieval turns this tells the browser the request is alive
+            # instead of leaving fetch() waiting on response headers.
+            yield _sse("status", {
+                "phase": "accepted",
+                "elapsed_ms": elapsed_ms(),
+            })
+
+            # A guest tenant exists only in browser storage until the first
+            # message. It still must exist before persistence, but doing this
+            # inside the generator lets the accepted event flush first.
+            await _ensure_tenant(db, tenant_id)
+            yield _sse("status", {
+                "phase": "retrieving",
+                "elapsed_ms": elapsed_ms(),
+            })
+
+            prepare_task = asyncio.create_task(
+                _prepare_turn(db, body, tenant_id, gemini_key)
+            )
+            while not prepare_task.done():
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(prepare_task),
+                        timeout=5.0,
+                    )
+                except asyncio.TimeoutError:
+                    yield _sse("heartbeat", {
+                        "phase": "retrieving",
+                        "elapsed_ms": elapsed_ms(),
+                    })
+            ctx = await prepare_task
+            prepare_task = None
 
             yield _sse("meta", {
                 "turn_kind":            ctx["plan"].kind,
@@ -766,12 +804,40 @@ async def chat_message_stream(
                 "query_used":           ctx["retrieval"].query_used if ctx["retrieval"].was_rewritten else "",
                 "retrieved_chunks":     ctx["citations"],
             })
+            yield _sse("status", {
+                "phase": "generating",
+                "elapsed_ms": elapsed_ms(),
+            })
 
             cache_manager = _get_cache_manager(gemini_key)
             accumulator = streaming.SentenceAccumulator()
             sentence_index = 0
 
-            async for fragment in cache_manager.stream(ctx["gen_request"], gemini_key):
+            fragment_stream = cache_manager.stream(
+                ctx["gen_request"],
+                gemini_key,
+            ).__aiter__()
+            while True:
+                if pending_fragment is None:
+                    pending_fragment = asyncio.create_task(
+                        fragment_stream.__anext__()
+                    )
+                try:
+                    fragment = await asyncio.wait_for(
+                        asyncio.shield(pending_fragment),
+                        timeout=5.0,
+                    )
+                except asyncio.TimeoutError:
+                    yield _sse("heartbeat", {
+                        "phase": "generating",
+                        "elapsed_ms": elapsed_ms(),
+                    })
+                    continue
+                except StopAsyncIteration:
+                    pending_fragment = None
+                    break
+
+                pending_fragment = None
                 yield _sse("delta", {"text": fragment})
                 for sentence in accumulator.push(fragment):
                     yield _sse("sentence", {"text": sentence, "index": sentence_index})
@@ -806,12 +872,22 @@ async def chat_message_stream(
                 "session_id":        body.session_id,
                 "cache_status":      "streamed",
                 "graph_context":     ctx["graph_context"],
+                "elapsed_ms":        elapsed_ms(),
             })
 
         except Exception as exc:  # noqa: BLE001
             logger.exception("Streaming generation failed: %s", exc)
             status, detail = _generation_error_response(exc)
             yield _sse("error", {"status": status, "detail": detail})
+        finally:
+            if prepare_task is not None and not prepare_task.done():
+                prepare_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await prepare_task
+            if pending_fragment is not None and not pending_fragment.done():
+                pending_fragment.cancel()
+                with suppress(asyncio.CancelledError):
+                    await pending_fragment
 
     return StreamingResponse(
         event_stream(),
@@ -841,7 +917,14 @@ class TTSRequest(BaseModel):
 # when the session expires, so the client needs to know whether to expect a
 # cloned voice or fall back to browser speech. Cached because probing upstream
 # on every request would add a round trip to something that changes rarely.
-_tts_status_cache: dict[str, float | bool] = {"checked_at": 0.0, "available": False}
+_tts_status_cache: dict[str, object] = {
+    "checked_at": 0.0,
+    "available": False,
+    "device": None,
+    "watermarking": None,
+    "voice": None,
+    "model": None,
+}
 _TTS_STATUS_TTL = 30.0
 
 
@@ -858,20 +941,42 @@ async def tts_status() -> dict:
 
     now = _time.monotonic()
     if now - float(_tts_status_cache["checked_at"]) < _TTS_STATUS_TTL:
-        return {"available": bool(_tts_status_cache["available"]), "cached": True}
+        return {
+            "available": bool(_tts_status_cache["available"]),
+            "cached": True,
+            "device": _tts_status_cache["device"],
+            "watermarking": _tts_status_cache["watermarking"],
+            "voice": _tts_status_cache["voice"],
+            "model": _tts_status_cache["model"],
+        }
 
     available = False
-    health_url = CHATTERBOX_URL.replace("/v1/audio/speech", "/health")
+    health: dict = {}
+    tts_url = os.getenv("CHATTERBOX_URL", CHATTERBOX_URL)
+    health_url = tts_url.replace("/v1/audio/speech", "/health")
     try:
         async with httpx.AsyncClient(timeout=4.0) as client:
             resp = await client.get(health_url)
             available = resp.status_code == 200
+            if available:
+                health = resp.json()
     except Exception:  # noqa: BLE001 - unreachable is a normal state here
         available = False
 
     _tts_status_cache["checked_at"] = now
     _tts_status_cache["available"] = available
-    return {"available": available, "cached": False}
+    _tts_status_cache["device"] = health.get("device")
+    _tts_status_cache["watermarking"] = health.get("watermarking")
+    _tts_status_cache["voice"] = health.get("voice")
+    _tts_status_cache["model"] = health.get("model")
+    return {
+        "available": available,
+        "cached": False,
+        "device": _tts_status_cache["device"],
+        "watermarking": _tts_status_cache["watermarking"],
+        "voice": _tts_status_cache["voice"],
+        "model": _tts_status_cache["model"],
+    }
 
 
 @router.post("/tts")
@@ -902,8 +1007,8 @@ async def synthesize_tts(
         "model": "tts-1",
         "input": text,
         "voice": "andrew_ng_ref",
-        # Applied at synthesis rather than by changing playback rate, which
-        # would shift pitch and formants on a cloned voice.
+        # Kept in the OpenAI-compatible request contract. The browser also
+        # applies pitch-preserving playbackRate so Turbo remains responsive.
         "speed": body.speed,
     }
 
@@ -913,18 +1018,45 @@ async def synthesize_tts(
     # the environment does not need a code change.
     tts_url = os.getenv("CHATTERBOX_URL", CHATTERBOX_URL)
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        try:
-            response = await client.post(tts_url, json=payload)
-        except httpx.RequestError as exc:
-            logger.error("Failed to reach TTS server at %s: %s", tts_url, exc)
-            raise HTTPException(status_code=502, detail="TTS service is unavailable or timed out")
+    request_started = time.perf_counter()
+    try:
+        await asyncio.wait_for(
+            _tts_synthesis_lock.acquire(),
+            timeout=_TTS_QUEUE_WAIT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=503,
+            detail="The cloned voice is busy. Use browser voice for this sentence.",
+        )
+
+    queue_ms = round((time.perf_counter() - request_started) * 1000)
+    upstream_started = time.perf_counter()
+    timeout = httpx.Timeout(connect=5.0, read=30.0, write=5.0, pool=3.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            try:
+                response = await client.post(tts_url, json=payload)
+            except httpx.RequestError as exc:
+                logger.error("Failed to reach TTS server at %s: %s", tts_url, exc)
+                raise HTTPException(status_code=502, detail="TTS service is unavailable or timed out")
+    finally:
+        _tts_synthesis_lock.release()
 
     if response.status_code != 200:
         logger.error("TTS upstream error: status %d, detail: %s", response.status_code, response.text[:300])
         raise HTTPException(status_code=502, detail=f"TTS synthesis failed: status {response.status_code}")
 
-    return Response(content=response.content, media_type="audio/wav")
+    return Response(
+        content=response.content,
+        media_type="audio/wav",
+        headers={
+            "X-TTS-Queue-Ms": str(queue_ms),
+            "X-TTS-Upstream-Ms": str(
+                round((time.perf_counter() - upstream_started) * 1000)
+            ),
+        },
+    )
 
 
 class TripletRow(BaseModel):
