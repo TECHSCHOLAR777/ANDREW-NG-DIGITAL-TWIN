@@ -154,6 +154,26 @@ else:
 
 print("Loading Chatterbox Turbo...")
 MODEL = ChatterboxTurboTTS.from_pretrained(device=DEVICE)
+
+# Chatterbox 0.1.7's loudness gain can promote a float32 waveform to float64
+# under Kaggle's NumPy 2.x stack. Turbo's S3 tokenizer has float32 mel filters,
+# so voice conditioning then fails with:
+#
+#     RuntimeError: expected scalar type Float but found Double
+#
+# Preserve loudness normalization for voice quality, but restore the dtype the
+# model expects before Chatterbox resamples and tokenizes the reference.
+_normalize_loudness = MODEL.norm_loudness
+
+
+def _normalize_loudness_float32(
+    wav, sr, target_lufs=-27, _normalize=_normalize_loudness
+):
+    normalized = _normalize(wav, sr, target_lufs)
+    return normalized.astype("float32", copy=False)
+
+
+MODEL.norm_loudness = _normalize_loudness_float32
 print("Preparing Andrew voice conditioning...")
 MODEL.prepare_conditionals(REFERENCE_AUDIO_PATH)
 print("Turbo model and Andrew voice are ready.")
