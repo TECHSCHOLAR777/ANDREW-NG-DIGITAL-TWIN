@@ -1,8 +1,8 @@
 name: tests
 
-# Runs only the checks that need no API key and no database, so every push is
-# gated on something real. The retrieval, persona and memory evaluations need
-# live credentials and are run manually; see scripts/eval/README.md.
+# Runs only the checks that need no API key or external database, so every push
+# is gated on something real. The retrieval, persona and memory evaluations
+# need live credentials and are run manually; see scripts/eval/README.md.
 
 on:
   push:
@@ -55,19 +55,11 @@ jobs:
 
   sql:
     name: migration syntax
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: pgvector/pgvector:pg16
-        env:
-          POSTGRES_PASSWORD: postgres
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
+    # Pin the runner because pgvector's package name follows PostgreSQL's
+    # version. This also avoids a Docker Hub pull before our steps can run.
+    runs-on: ubuntu-24.04
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
     steps:
       - uses: actions/checkout@v4
 
@@ -75,17 +67,22 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install and start PostgreSQL with pgvector
+        run: |
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y postgresql-16-pgvector
+          sudo systemctl start postgresql
+          sudo -u postgres psql --set ON_ERROR_STOP=1 \
+            --command "ALTER USER postgres PASSWORD 'postgres';"
+          pg_isready --host localhost --port 5432 --username postgres
+
       - run: pip install asyncpg python-dotenv
 
       - name: Apply every migration in order
         # Catches ordering mistakes and syntax errors before they reach a real
         # database, which previously could only be discovered by pasting SQL
         # into the Supabase console and seeing what broke.
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
         run: python scripts/migrate.py
 
       - name: Re-run to prove migrations are idempotent
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
         run: python scripts/migrate.py --status
