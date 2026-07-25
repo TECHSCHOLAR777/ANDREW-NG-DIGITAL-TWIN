@@ -17,7 +17,7 @@ free T4 sessions, so the split is:
     ───────────            ────────────────────────
     Next.js frontend
     FastAPI backend  ──────►  Chatterbox TTS
-    Postgres (Supabase)       exposed via a tunnel
+    Postgres (Neon)           exposed via a tunnel
 
 The backend already reads CHATTERBOX_URL from the environment, so pointing it
 at the tunnel is a one line change with no code edits.
@@ -44,8 +44,8 @@ WHAT TO EXPECT
 * The server uses Chatterbox Turbo, the low-latency English voice-agent model,
   and prepares Andrew's reference conditioning once at startup instead of
   re-encoding it for every sentence.
-* Kaggle sessions expire after about 9 hours and the tunnel URL changes each
-  time you restart. This is a development and demo setup, not production.
+* Kaggle sessions expire and the tunnel URL changes each time you restart.
+  This is a development and demo setup, not production.
 * The notebook tab must stay open. Kaggle stops idle sessions.
 """
 
@@ -180,8 +180,8 @@ print("Turbo model and Andrew voice are ready.")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SERVER
-# Same request and response contract as run_chatterbox_server.py, so the
-# backend cannot tell the difference between local and remote.
+# OpenAI-compatible request and response contract used by the backend
+# /api/v1/chat/tts route.
 # ─────────────────────────────────────────────────────────────────────────────
 import io
 import threading

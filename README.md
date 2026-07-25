@@ -459,8 +459,7 @@ The repository includes a scheduled GitHub Actions health ping for the current R
 | Document | Contents |
 |---|---|
 | [`architecture.md`](architecture.md) | Deeper backend, retrieval, memory, and database design notes |
-| [`persona_contract.md`](persona_contract.md) | Behavioural contract and disclosure rules |
-| [`andrew_ng_digital_twin_system_prompt.md`](andrew_ng_digital_twin_system_prompt.md) | Persona and response-policy reference |
+| [`persona_contract.md`](persona_contract.md) | Persona behaviour, enforcement, grounding, and disclosure rules |
 | [`docs/VOICE_SETUP.md`](docs/VOICE_SETUP.md) | Local and Kaggle voice configuration |
 | [`docs/NEON_SETUP.md`](docs/NEON_SETUP.md) | Hosted PostgreSQL and deployment setup |
 | [`docs/PRIVACY.md`](docs/PRIVACY.md) | Storage, third-party processing, and deletion boundaries |
