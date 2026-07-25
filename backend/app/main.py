@@ -4,7 +4,7 @@ main.py
 FastAPI application entrypoint.
 
 Environment variables (set in .env or hosting platform):
-  DATABASE_URL   : postgresql+asyncpg://user:pass@host/db (Supabase connection string)
+  DATABASE_URL   : postgresql+asyncpg://user:pass@host/db (PostgreSQL connection string)
   ENVIRONMENT    : "development" | "production"
 
 No GEMINI_API_KEY here — all keys come from the client (BYOK pattern).
@@ -40,9 +40,9 @@ async def lifespan(app: FastAPI):
     db_url_raw = os.environ.get("DATABASE_URL")
     if not db_url_raw:
         raise RuntimeError(
-            "DATABASE_URL is not set. Create a .env file with your Supabase "
-            "Postgres connection string, e.g. "
-            "DATABASE_URL=postgresql://postgres:<password>@db.<project>.supabase.co:5432/postgres"
+            "DATABASE_URL is not set. Create a .env file with a direct "
+            "PostgreSQL connection string, e.g. "
+            "DATABASE_URL=postgresql://user:<password>@host/database?sslmode=require"
         )
     db_url = db_url_raw.replace("postgresql+asyncpg://", "postgresql://")
     # Retry DB connection up to 3 times (handles transient IPv6 routing issues)
@@ -66,7 +66,7 @@ async def lifespan(app: FastAPI):
             if attempt == max_retries:
                 raise
             await asyncio.sleep(2 ** attempt)  # exponential backoff: 2s, 4s
-    # Preload the sentence-transformers model on startup to prevent first-request timeouts
+    # Preload only when EMBED_PROVIDER=local. External providers make this a no-op.
     from .routers.chat import preload_local_embed_model
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, preload_local_embed_model)

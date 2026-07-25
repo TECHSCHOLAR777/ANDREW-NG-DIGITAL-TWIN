@@ -9,11 +9,10 @@
 #
 #   docker compose up
 #
-# The database is deliberately NOT included. The project targets
-# Supabase, and running a throwaway Postgres here would mean the
-# thing you develop against is not the thing you deploy against.
-# Point DATABASE_URL at Supabase, or at a local Postgres with
-# pgvector if you prefer.
+# The database is deliberately NOT included. The deployed project targets
+# Neon, and running a throwaway Postgres here would mean the thing you develop
+# against is not the thing you deploy against. Point DATABASE_URL at Neon, or
+# at a local Postgres instance with pgvector if you prefer.
 # ============================================================
 
 services:
@@ -30,6 +29,10 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       ENVIRONMENT: ${ENVIRONMENT:-development}
       CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:3000}
+      EMBED_PROVIDER: ${EMBED_PROVIDER:-jina}
+      JINA_API_KEY: ${JINA_API_KEY:-}
+      JINA_EMBED_MODEL: ${JINA_EMBED_MODEL:-jina-embeddings-v3}
+      EMBED_DIMS: ${EMBED_DIMS:-1024}
       # Defaults to the tunnel from notebooks/kaggle_tts_server.py when set,
       # otherwise the frontend falls back to browser speech.
       CHATTERBOX_URL: ${CHATTERBOX_URL:-http://127.0.0.1:5002/v1/audio/speech}
@@ -40,9 +43,8 @@ services:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
       interval: 30s
       timeout: 5s
-      # Generous, because the embedding model is baked into the image but
-      # still has to load into memory before the first request.
-      start_period: 90s
+      # External embeddings mean no model weights need to load at startup.
+      start_period: 30s
       retries: 3
     restart: unless-stopped
 
@@ -50,11 +52,14 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        # NEXT_PUBLIC values are compiled into the browser bundle.
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://127.0.0.1:8000}
     ports:
       - "3000:3000"
     environment:
-      # Baked at build time by Next.js, so the browser talks to the host
-      # port rather than the compose network name.
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required, see .env.example}
+      AUTH_SECRET: ${AUTH_SECRET:?AUTH_SECRET is required, see .env.example}
       NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://127.0.0.1:8000}
     depends_on:
       backend:

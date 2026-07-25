@@ -1,14 +1,11 @@
 # ============================================================
 # Andrew Ng Digital Twin - backend API
 #
-# Embeddings come from the Gemini API (EMBED_PROVIDER=gemini, the default), so
+# Embeddings come from an external API (EMBED_PROVIDER=jina by default), so
 # this image carries no torch and no model weights.
 #
-#   before  1.4 GB image, 852 MB peak RAM, 30-60s cold start, paid instance
-#   after   ~200 MB image, ~200 MB RAM, ~3s cold start, fits a free tier
-#
-# The embedding model was the only reason this needed a 2 GB instance. Every
-# free tier is 512 MB.
+# Keeping embeddings outside the API image substantially reduces image size,
+# memory pressure, and cold-start time.
 #
 # To run embeddings in-process instead, install the local extras and set
 # EMBED_PROVIDER=local. That is a development convenience, not a deployment
@@ -36,7 +33,7 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PORT=8000 \
-    EMBED_PROVIDER=gemini
+    EMBED_PROVIDER=jina
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \

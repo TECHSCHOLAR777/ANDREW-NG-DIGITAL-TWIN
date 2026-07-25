@@ -3,10 +3,9 @@ scripts/migrate.py
 ─────────────────────────────────────────────────────────────────────────────
 Apply SQL migrations in order and record what has run.
 
-Before this, setup meant opening the Supabase SQL editor and pasting eleven
-files in the correct sequence by hand, with the ordering constraints living
-only in the README's prose. There was no record of what had been applied, so
-the only way to know the state of a database was to inspect it.
+The runner discovers every numbered migration, applies pending files in lexical
+order, and records their checksums. It works with standard PostgreSQL; the
+deployed project uses Neon.
 
 Usage:
     python scripts/migrate.py              # apply anything outstanding
@@ -67,7 +66,7 @@ async def main() -> int:
     if not db_url:
         sys.exit(
             "DATABASE_URL is not set.\n"
-            "Copy .env.example to .env and fill in your Supabase connection string."
+            "Copy .env.example to .env and fill in your PostgreSQL connection string."
         )
 
     files = discover()
@@ -78,15 +77,15 @@ async def main() -> int:
         conn = await asyncpg.connect(dsn=normalise_db_url(db_url), timeout=15)
     except Exception as exc:  # noqa: BLE001
         # A stack trace here tells the user nothing useful. The realistic
-        # causes are a paused Supabase project, a rotated password, or a
+        # causes are an idle or unavailable database, a rotated password, or a
         # copied-but-not-edited connection string.
         print(f"\nCould not connect to the database.\n  {type(exc).__name__}: {exc}\n")
         print("Common causes:")
-        print("  - The Supabase project is paused (free tier pauses when idle).")
+        print("  - The database is idle, unavailable, or was deleted.")
         print("  - The password in DATABASE_URL is wrong or was rotated.")
         print("  - DATABASE_URL still contains the placeholder from .env.example.")
-        print("  - The project reference in the host name no longer exists.\n")
-        print("Check Settings > Database > Connection string in the Supabase dashboard.")
+        print("  - The host name no longer exists.\n")
+        print("Copy a current direct connection string from your database provider.")
         return 2
 
     try:
