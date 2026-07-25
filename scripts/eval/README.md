@@ -116,10 +116,20 @@ ablations is three passes of embedding and search, mostly local. The memory
 scenarios are roughly a dozen generations. None of this is expensive enough to
 be a reason not to run it.
 
-## Honest status
+## Execution notes
 
-The offline layers (unit tests, corpus style, persona offline scoring) have
-been run and pass. The retrieval and memory harnesses are written and their
-pure logic is verified, but they have not been executed end to end, because the
-configured `DATABASE_URL` is not currently valid. First run against a live
-database should be treated as a shakedown.
+The offline layers need no live service. Retrieval and memory evaluations write
+temporary data and require a database whose migrations, corpus embeddings, and
+configured embedding provider agree.
+
+Before running the live layers:
+
+1. use a Neon branch or another disposable database;
+2. run `python scripts/migrate.py --status`;
+3. run `python scripts/smoke_test.py`;
+4. confirm the configured Gemini key and embedding quota;
+5. omit `--keep` unless you intend to inspect the evaluation tenant afterward.
+
+Do not treat an old pass result as proof that the current deployed models still
+behave the same way. Model aliases and provider behaviour can change without a
+repository commit, so record the model IDs and date with every live evaluation.

@@ -1,214 +1,213 @@
 # Voice Setup
 
-Getting cloned-voice output and hands-free voice conversation working, with no
-local GPU.
+The application supports hands-free input, cloned speech when a GPU service is
+available, and browser speech when it is not.
 
-## How the pieces fit
+> [!IMPORTANT]
+> The Chatterbox clone is intended for a private demonstration. It uses a
+> synthetic recreation of a living person's voice. Keep the disclosure and
+> watermarking enabled, use a reference sample you have the right to process,
+> and do not present generated audio as a real recording.
 
-```
-  you speak
-      │
-      ▼
-  browser speech recognition          (Chrome, sends audio to Google)
-      │  transcript
-      ▼
-  frontend  ──POST /api/v1/chat/stream──►  backend
-      │                                        │
-      │  ◄── SSE: delta + sentence events ─────┘
-      │
-      │  per completed sentence
-      ▼
-  frontend ──POST /api/v1/chat/tts──► backend ──► Chatterbox on Kaggle T4
-      │                                                    │
-      │  ◄──────────── WAV audio ──────────────────────────┘
-      ▼
-  audio plays while later sentences are still being generated
-```
+## Voice architecture
 
-The important property: **synthesis for sentence one starts while sentence
-three is still being written.** Without that overlap the floor is 8 to 30
-seconds before any audio; with it, roughly two.
+```mermaid
+flowchart LR
+    Mic["Microphone"]
+    Recognition["Browser speech recognition"]
+    UI["Next.js client"]
+    API["FastAPI"]
+    Gemini["Gemini response stream"]
+    Clone["Chatterbox Turbo<br/>optional GPU service"]
+    BrowserVoice["Browser speech synthesis<br/>fallback"]
 
----
-
-## Part 1: The cloned voice on Kaggle
-
-### Why not locally
-
-Chatterbox is a neural TTS model. On CPU it takes 10 to 30 seconds per
-sentence, so a ten-sentence answer means minutes before the first word. It
-needs a GPU, and this machine has none.
-
-Kaggle gives free T4 sessions with about 30 GPU hours a week, which is more
-than enough.
-
-### 1.1 Prepare the voice sample
-
-`backend/data/andrew_ng_ref.wav` is gitignored on purpose: a biometric sample
-of a real, identifiable person should not sit in a repository that may become
-public. See `docs/POSTURE.md`.
-
-What makes a good reference:
-
-- 10 to 30 seconds of clean speech
-- One speaker, no music, no overlap
-- Normal speaking pace
-- WAV, mono, 24kHz or higher
-
-### 1.2 Upload it to Kaggle
-
-1. Kaggle, **Datasets**, **New Dataset**
-2. Upload the wav
-3. Title: `andrew-ng-voice`
-4. **Visibility: Private**
-5. Create
-
-### 1.3 Run the notebook
-
-1. **Code**, **New Notebook**
-2. **Settings, Accelerator, GPU T4 x2**
-3. **Settings, Internet, On.** The tunnel cannot open without it, and this is
-   the most common reason the last cell fails.
-4. **Add Input**, attach your `andrew-ng-voice` dataset
-5. Upload `notebooks/kaggle_tts_server.ipynb`, or paste
-   `notebooks/kaggle_tts_server.py` into one cell
-6. Run all cells
-
-Cell 5 plays a test clip. **Listen to it before continuing.** If it does not
-sound like the reference, the problem is the sample, not the wiring.
-
-The last cell prints:
-
-```
-CHATTERBOX_URL=https://something-random.trycloudflare.com/v1/audio/speech
+    Mic --> Recognition
+    Recognition -->|"transcript"| UI
+    UI -->|"SSE chat request"| API
+    API --> Gemini
+    Gemini -->|"delta and sentence events"| API
+    API --> UI
+    UI -->|"sentence TTS request"| API
+    API --> Clone
+    Clone -->|"WAV"| UI
+    UI -. "when clone is unavailable" .-> BrowserVoice
 ```
 
-### 1.4 Connect it
+The browser never waits for the complete answer before starting speech.
+Completed sentence events are synthesized while later text is still being
+generated.
 
-In your local `.env`:
+## Browser-only voice
+
+No GPU is required for the supported fallback.
+
+1. Leave `CHATTERBOX_URL` unset or point it at an unavailable endpoint.
+2. Start the frontend and backend normally.
+3. Open the application in Chrome or Edge over HTTPS or `localhost`.
+4. Allow microphone access when entering interactive voice mode.
+
+The browser converts speech to text through its speech-recognition provider.
+When cloned speech is unavailable, the frontend uses a pinned browser voice so
+the provider does not change between sentences.
+
+Browser speech quality and recognition support vary by operating system and
+browser. Firefox does not currently provide the same
+`webkitSpeechRecognition` interface used by this application.
+
+## Private cloned-voice demo on Kaggle
+
+The maintained server is:
+
+- `notebooks/kaggle_tts_server.ipynb`
+- `notebooks/kaggle_tts_server.py`
+
+Both load Chatterbox Turbo, condition the reference voice once, expose an
+OpenAI-compatible speech endpoint, and report watermarking state through
+`/health`.
+
+### 1. Prepare the reference sample
+
+`backend/data/andrew_ng_ref.wav` is intentionally excluded from Git.
+
+A useful conditioning sample is:
+
+- 10 to 30 seconds long;
+- one speaker only;
+- free of music, overlap, echo, and heavy compression;
+- recorded at a natural speaking pace;
+- stored as WAV.
+
+Upload the sample to a private Kaggle dataset. Do not make a biometric voice
+sample public merely to simplify notebook setup.
+
+### 2. Configure Kaggle
+
+1. Create or open a Kaggle notebook.
+2. Enable a GPU accelerator.
+3. Enable internet access so the public tunnel can start.
+4. Attach the private dataset containing `andrew_ng_ref.wav`.
+5. Import `notebooks/kaggle_tts_server.ipynb`, or paste the Python notebook
+   script into a cell.
+6. Run all cells.
+
+Listen to the generated test clip before connecting the application. A clean
+reference sample matters more than frontend playback tuning.
+
+The final cell prints values similar to:
+
+```text
+CHATTERBOX_URL=https://random-name.trycloudflare.com/v1/audio/speech
+```
+
+The `trycloudflare.com` address changes whenever the quick tunnel restarts.
+Kaggle sessions and Cloudflare Quick Tunnels are temporary development tools,
+not production hosting.
+
+### 3. Connect the backend
+
+For local development, add the printed endpoint to `.env`:
+
+```dotenv
+CHATTERBOX_URL=https://random-name.trycloudflare.com/v1/audio/speech
+```
+
+For the deployed backend, set the same variable in Render and restart or
+redeploy the service.
+
+Verify the GPU server directly:
 
 ```bash
-CHATTERBOX_URL=https://something-random.trycloudflare.com/v1/audio/speech
+curl https://random-name.trycloudflare.com/health
 ```
 
-Restart the backend, then check from your laptop:
+Expected fields include:
 
-```bash
-curl https://something-random.trycloudflare.com/health
-# {"status":"ok","device":"cuda","watermarking":true,"voice":"andrew_ng_ref"}
+```json
+{
+  "status": "ok",
+  "device": "cuda",
+  "watermarking": true,
+  "voice": "andrew_ng_ref",
+  "model": "chatterbox-turbo"
+}
 ```
 
-`"device":"cuda"` is the part that matters. If it says `cpu`, the accelerator
-was not enabled and it will be unusably slow.
-
-### 1.5 Verify the whole chain
+Then verify the application chain:
 
 ```bash
 python scripts/smoke_test.py
 ```
 
-Look for `cloned voice ok, device=cuda`.
+## What happens when the GPU stops
 
----
+The backend exposes `GET /api/v1/chat/tts/status`. The frontend checks this
+before playback and can refresh it after a failure.
 
-## Part 2: Using voice in the app
+If Chatterbox is unavailable, times out, or is busy:
 
-### Read aloud
+1. the current synthesis request fails quickly;
+2. the frontend selects the browser voice;
+3. queued and future sentences continue through the fallback;
+4. the text conversation remains unaffected.
 
-The speaker icon in the chat header. Answers are spoken as they generate,
-sentence by sentence.
+Restarting the Kaggle notebook restores cloned speech after the new tunnel URL
+is copied to `CHATTERBOX_URL`.
 
-### Hands-free conversation
+## Optional ngrok development domain
 
-The headphones icon beside the message box. This opens voice mode, which cycles
-through:
+ngrok can remove the need to change the backend environment variable after
+every notebook restart. It supplies a public HTTPS tunnel to port 5002, just as
+the current Cloudflare command does.
 
-```
-listening ──► thinking ──► speaking ──► listening
-```
+ngrok does not keep Kaggle alive, provide a GPU, or turn the notebook into
+production hosting. The free plan supplies an account-assigned development
+domain. Do not hardcode an auth token or assume a custom free domain can be
+chosen.
 
-- **listening**: microphone open, waiting for you
-- **thinking**: your words were transcribed and sent
-- **speaking**: the answer is being spoken as it arrives
-- Escape, or the close button, exits
-
-Speech recognition stops while the tutor is speaking, so it does not transcribe
-its own voice.
-
-### Requirements
-
-- **Chrome or Edge.** `webkitSpeechRecognition` is not in Firefox or Safari.
-- **Microphone permission.**
-- **HTTPS, or localhost.** Browsers refuse microphone access on plain HTTP from
-  a remote origin, so a deployed frontend must be served over HTTPS.
-
----
-
-## Part 3: When the voice service is down
-
-A tunnel-backed GPU session is ephemeral: it expires after about nine hours and
-the URL changes on restart. This is treated as a normal state, not an error.
-
-The frontend checks `/api/v1/chat/tts/status` on load, and if a synthesis
-request returns 502 it switches to the **browser's own speech synthesis** for
-the rest of the answer. Generic voice instead of the clone, but voice mode
-keeps working end to end.
-
-To restore the cloned voice: re-run the notebook, copy the new URL into `.env`,
-restart the backend.
-
-### Avoiding the URL churn
-
-ngrok's free tier includes one static domain, which gives a permanent address:
+Store `NGROK_AUTHTOKEN` in Kaggle Secrets, then use a notebook cell similar to:
 
 ```python
 !pip install -q pyngrok
+
+from kaggle_secrets import UserSecretsClient
 from pyngrok import ngrok
-ngrok.set_auth_token("YOUR_TOKEN")
-tunnel = ngrok.connect(PORT, domain="your-static-domain.ngrok-free.app")
+
+token = UserSecretsClient().get_secret("NGROK_AUTHTOKEN")
+ngrok.set_auth_token(token)
+tunnel = ngrok.connect(5002, "http")
 print(tunnel.public_url)
 ```
 
-Then `CHATTERBOX_URL` never changes and only the notebook needs restarting.
-
----
+Confirm that the printed hostname is the development domain assigned to the
+ngrok account before saving it in Render.
 
 ## Troubleshooting
 
-| Symptom | Cause | Fix |
+| Symptom | Likely cause | Action |
 |---|---|---|
-| Notebook: tunnel fails to start | Internet disabled | Settings, Internet, On |
-| `/health` reports `device: cpu` | No accelerator | Settings, Accelerator, GPU T4 x2 |
-| Notebook: reference audio not found | Dataset not attached | Add Input, attach `andrew-ng-voice`. The cell lists what it can see |
-| Test clip sounds wrong | Poor reference sample | Cleaner audio, one speaker, 10 to 30s |
-| Generic voice instead of cloned | TTS unreachable, fallback active | `curl <url>/health`; session probably expired |
-| No audio at all | Read aloud off, or browser blocked autoplay | Enable read aloud; click the page once first |
-| Microphone does nothing | Not Chrome, or permission denied, or plain HTTP | Use Chrome over HTTPS or localhost, allow the mic |
-| Voice mode stuck on "listening" | Recognition heard nothing | Speak closer, check the mic. Escape exits |
-| First sentence slow, rest fast | Model warming up | Expected on the first request after idle |
-| Audio choppy between sentences | Synthesis slower than playback | Lower `RETRIEVAL_NEIGHBOR_WINDOW` for shorter answers, or accept the gap |
+| Tunnel command cannot connect | Kaggle internet access is disabled | Enable internet and rerun the tunnel cell |
+| `/health` reports `cpu` | GPU accelerator is not active | Enable the accelerator and restart the session |
+| Reference audio is not found | Private dataset is not attached or filename differs | Attach the dataset and inspect the paths printed by the notebook |
+| Test clip sounds unlike the reference | Noisy, short, or multi-speaker sample | Replace it with clean single-speaker audio |
+| `address already in use` on port 5002 | The server from an earlier cell is still running | Reuse the existing server or restart the Kaggle session before relaunching |
+| Browser uses generic speech | Chatterbox health check failed | Check the tunnel, Kaggle session, and Render `CHATTERBOX_URL` |
+| Microphone does nothing | Permission, browser, or secure-origin issue | Use Chrome or Edge over HTTPS or localhost and allow the microphone |
+| No audio plays | Autoplay was blocked | Interact with the page once, then retry |
+| First cloned sentence is slow | Model or GPU is warming | Send one short warm-up request before a demo |
+| Sentences have gaps | Synthesis is slower than playback | Keep answers concise or use an always-warm GPU service |
 
----
+## Production decision
 
-## Deployment
+Kaggle plus a public tunnel is appropriate for a private demo only. A
+production service needs a stable GPU endpoint, authentication, rate limits,
+monitoring, and clear rights to the selected voice.
 
-**Do not point a public deployment at a Kaggle tunnel.** Sessions expire, the
-URL rotates, and it is a shared free resource.
+For a public deployment, use one of these designs:
 
-`docs/POSTURE.md` also commits to not serving the cloned voice publicly: it is
-a clone of a real person's voice, and a local demo is defensible where a public
-service is not.
+1. Browser speech only, with no cloned voice infrastructure.
+2. A licensed hosted voice through an adapter matching the current TTS
+   request contract.
+3. An authenticated GPU service you operate, using a voice you are permitted
+   to deploy.
 
-For a public deployment, pick one:
-
-1. **Browser speech synthesis only.** Leave `CHATTERBOX_URL` unset. Voice works
-   with a generic voice, costs nothing, needs no infrastructure. This is the
-   recommended default.
-2. **A hosted TTS provider** with a non-cloned voice. Cartesia and ElevenLabs
-   both stream with low time-to-first-byte. Point `CHATTERBOX_URL` at an
-   adapter matching the same request contract.
-3. **Your own GPU host** running `run_chatterbox_server.py`. Full control,
-   ongoing cost, and the likeness question in POSTURE.md still applies.
-
-The cloned voice stays a local capability, shown in a recorded demo rather than
-served from a URL.
+See [`POSTURE.md`](POSTURE.md) for the project's public-use boundaries.

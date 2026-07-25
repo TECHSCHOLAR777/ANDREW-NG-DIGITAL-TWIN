@@ -1,36 +1,74 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Frontend
 
-## Getting Started
+The frontend is a Next.js 16 and React 19 application containing the public
+site, Auth.js account flow, conversation workspace, knowledge graph, and voice
+interface.
 
-First, run the development server:
+Project-wide architecture, backend setup, privacy, and deployment instructions
+live in the root [`README.md`](../README.md).
+
+## Local development
+
+Install dependencies:
+
+```bash
+cd frontend
+npm ci
+```
+
+Create `frontend/.env.local`:
+
+```dotenv
+DATABASE_URL=postgresql://USER:PASSWORD@HOST/DATABASE?sslmode=require
+AUTH_SECRET=replace_with_a_long_random_secret
+NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
+```
+
+`DATABASE_URL` is used by the signup and Auth.js server routes.
+`NEXT_PUBLIC_API_BASE_URL` is used by the browser to call FastAPI.
+
+Start the application:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open `http://localhost:3000`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Routes
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Route | Purpose |
+|---|---|
+| `/` | Public landing page |
+| `/understand` | Interactive architecture explanation |
+| `/login` | Sign in |
+| `/signup` | Create an account and adopt guest memory |
+| `/app` | Conversation, graph, history, settings, and voice workspace |
 
-## Learn More
+## Quality checks
 
-To learn more about Next.js, take a look at the following resources:
+Run these before deploying:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+npx tsc --noEmit
+npm run lint
+npm run build
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+The production build must receive the intended
+`NEXT_PUBLIC_API_BASE_URL`. Public Next.js environment values are fixed at
+build time, so changing the backend URL requires a redeploy.
 
-## Deploy on Vercel
+## Deployment
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+The deployed frontend runs on Vercel with the project root set to `frontend`.
+Configure:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```dotenv
+DATABASE_URL=postgresql://USER:PASSWORD@HOST/DATABASE?sslmode=require
+AUTH_SECRET=replace_with_a_production_secret
+NEXT_PUBLIC_API_BASE_URL=https://your-backend.example
+```
+
+Add the final Vercel HTTPS origin to the backend's
+`CORS_ALLOW_ORIGINS`.

@@ -1,318 +1,298 @@
-# Moving to Neon, and Deploying
+# Neon Database and Deployment Setup
 
-Complete path from a dead database to a deployed system.
+This guide covers a clean PostgreSQL setup and the current Vercel, Render, and
+Neon deployment.
 
-## Why Neon rather than Supabase
+## Deployment shape
 
-Your Supabase project returns `(ENOTFOUND) tenant/user postgres.<ref> not
-found`, which means it was deleted, paused, or its credentials rotated.
+```mermaid
+flowchart LR
+    Browser["Browser"]
+    Vercel["Vercel<br/>Next.js and Auth.js"]
+    Render["Render<br/>FastAPI"]
+    Neon[("Neon<br/>PostgreSQL and pgvector")]
+    Jina["Jina embeddings"]
+    Gemini["Gemini<br/>visitor's key"]
+    Voice["Optional TTS service"]
 
-The failure mode matters more than the incident. **Supabase free tier pauses
-projects after about a week of inactivity and requires a dashboard visit to
-resume.** For a project you want to show people, that means the demo is dead
-exactly when someone clicks the link.
-
-Neon also scales to zero, but **wakes automatically on the next connection** in
-roughly 500ms. Same cost, no manual intervention. That is the entire reason for
-the switch.
-
-Nothing in this codebase is Supabase-specific. It is plain Postgres plus
-pgvector, so the migration is a connection string change and two commands.
-
----
-
-## Part 1: Create the database
-
-### 1.1 Create the project
-
-1. Sign up at [neon.tech](https://neon.tech) (GitHub login works).
-2. Create a project.
-3. **Region: pick the one closest to where the backend will run**, not to you.
-   Every turn makes several database round trips, so backend-to-database
-   latency multiplies. If you deploy to Singapore, choose Singapore.
-4. Postgres 16 or later.
-
-### 1.2 Get the connection string
-
-Dashboard, **Connection Details**. You will see two options.
-
-**Take the direct connection, not the pooled one.**
-
-```
-# Correct, direct:
-postgresql://user:pass@ep-xxx.region.aws.neon.tech/neondb?sslmode=require
-
-# Wrong for this project, pooled:
-postgresql://user:pass@ep-xxx-pooler.region.aws.neon.tech/neondb?sslmode=require
+    Browser --> Vercel
+    Browser -->|"REST and SSE"| Render
+    Vercel --> Neon
+    Render --> Neon
+    Render --> Jina
+    Render --> Gemini
+    Render --> Voice
 ```
 
-The pooler is PgBouncer in transaction mode, which disables prepared
-statements. asyncpg uses prepared statements for every query, so the pooled
-endpoint fails in confusing ways rather than cleanly. The distinguishing
-detail is `-pooler` in the hostname.
+The frontend connects to Neon for account creation and authentication. The
+backend uses the same database for the shared corpus, sessions, and
+tenant-scoped memory.
 
-### 1.3 Enable pgvector
+## 1. Create the database
 
-Neon ships the extension but it must be enabled per database. Use the SQL
-Editor in the dashboard:
+Create a Neon PostgreSQL project near the Render region to reduce round-trip
+latency. Copy a direct connection string:
+
+```text
+postgresql://USER:PASSWORD@HOST/DATABASE?sslmode=require
+```
+
+The project uses asyncpg prepared statements. Prefer the direct Neon endpoint.
+If you deliberately use a transaction-pooler endpoint, the backend connection
+configuration must be adjusted for that mode.
+
+Enable pgvector:
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS vector;
 ```
 
-Migration 001 also does this, so you can skip it, but doing it first turns a
-confusing migration failure into a clear one.
+Migration 001 also creates the extension, but running this command first gives
+a clearer failure if the database role cannot manage extensions.
 
-### 1.4 Point the project at it
+## 2. Configure local tooling
 
-In `.env`:
+Copy the environment template:
 
-```bash
-DATABASE_URL=postgresql://user:pass@ep-xxx.region.aws.neon.tech/neondb?sslmode=require
+```powershell
+Copy-Item .env.example .env
 ```
 
-`sslmode=require` is not optional. Neon rejects unencrypted connections.
+Set at least:
 
-### 1.5 Verify
-
-```bash
-python scripts/smoke_test.py
+```dotenv
+DATABASE_URL=postgresql://USER:PASSWORD@HOST/DATABASE?sslmode=require
+EMBED_PROVIDER=jina
+JINA_API_KEY=your_jina_key
+EMBED_DIMS=1024
+ENVIRONMENT=development
 ```
 
-The database section should report `connection ok`. If it does not, the message
-names the cause.
+Ingestion and live retrieval must use the same embedding provider, model, and
+dimensions. The deployed corpus uses Jina `jina-embeddings-v3` at 1024
+dimensions.
 
----
+## 3. Apply migrations
 
-## Part 2: Build the schema and corpus
+The repository currently contains 17 ordered migrations.
 
-### 2.1 Migrations
+Check the target before changing it:
 
 ```bash
-python scripts/migrate.py --status   # what would run
-python scripts/migrate.py            # apply all twelve
+python scripts/migrate.py --status
+python scripts/migrate.py --dry-run
 ```
 
-Each runs in its own transaction, so a failure leaves you on the last good
-migration rather than half-applied.
+Apply pending migrations:
 
-**These have never run against a live database.** Treat this as a shakedown. If
-migration 009 fails on duplicate live triples, that is correct behaviour on
-pre-existing data; tell me and I will write the dedup. On a fresh Neon database
-there is no pre-existing data, so this should be clean.
+```bash
+python scripts/migrate.py
+```
 
-### 2.2 Ingest the corpus
+Each file runs in its own transaction and is recorded with a checksum in
+`schema_migrations`.
+
+> [!CAUTION]
+> Migration `014_voyage_embeddings_1024.sql` changes vector width from 768 to
+> 1024 and deletes existing `knowledge_chunks` before the change. This is
+> correct for a fresh database or a deliberate corpus re-embedding. On an
+> established database, inspect `--status` and back up the database before
+> applying it.
+
+Do not edit an applied migration. Add a new numbered migration instead.
+
+## 4. Ingest the corpus
+
+Source documents are intentionally absent from Git. Prepare them under the
+ignored data directories, then run:
 
 ```bash
 python scripts/ingest_supabase.py
 ```
 
-Twenty to forty minutes. Embeddings are computed locally on CPU, which is the
-slow part. The script is idempotent: it compares chunk counts per file and
-skips what is already loaded, so an interrupted run can be resumed.
+The filename is historical. The script targets standard PostgreSQL and works
+with Neon.
 
-### 2.3 Rebuild the vector index
-
-**Do not skip this.** HNSW built before data exists has the same silent recall
-problem that made the original IVFFlat index useless.
+After a full ingest, rebuild the HNSW index over the settled data:
 
 ```sql
 REINDEX INDEX idx_knowledge_chunks_embedding_hnsw;
 ```
 
-### 2.4 Verify
+Verify database, migration, corpus, embedding, and service status:
 
 ```bash
 python scripts/smoke_test.py
 ```
 
-Expect: all migrations applied, chunks ingested and embedded, vector index
-HNSW.
-
-### 2.5 Optional: build the curriculum
+If a curriculum graph is required:
 
 ```bash
 python scripts/build_curriculum.py --out data/baselines/curriculum.json
-# review the JSON before loading
 python scripts/build_curriculum.py --load data/baselines/curriculum.json
 ```
 
-Without it, learning paths and gap diagnosis stay off and everything else works.
+Review the generated JSON before loading it.
 
----
+## 5. Run locally
 
-## Part 3: Neon specifics that affect this codebase
+Start the backend:
 
-### Autosuspend and the first request
+```bash
+uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
+```
 
-Neon suspends compute after five minutes idle and wakes on connection. The
-first query after a suspend takes roughly 500ms to 2s.
+Create `frontend/.env.local`:
 
-The backend already handles this: `main.py` retries the initial pool connection
-three times with exponential backoff. Nothing to change, but if the very first
-request after a long idle feels slow, this is why.
+```dotenv
+DATABASE_URL=postgresql://USER:PASSWORD@HOST/DATABASE?sslmode=require
+AUTH_SECRET=replace_with_a_long_random_secret
+NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
+```
 
-To eliminate it, disable autosuspend in Neon settings. That consumes compute
-hours continuously, so on the free tier it will exhaust your monthly allowance.
-Leave it on.
+Start the frontend:
+
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+Open `http://localhost:3000`.
+
+## 6. Deploy the backend to Render
+
+Create a Web Service from the repository using the root `Dockerfile`.
+
+Configure:
+
+```dotenv
+DATABASE_URL=postgresql://USER:PASSWORD@HOST/DATABASE?sslmode=require
+ENVIRONMENT=production
+CORS_ALLOW_ORIGINS=https://your-project.vercel.app
+EMBED_PROVIDER=jina
+JINA_API_KEY=your_jina_key
+JINA_EMBED_MODEL=jina-embeddings-v3
+EMBED_DIMS=1024
+CORPUS_TENANT_ID=your_shared_corpus_tenant_uuid
+```
+
+Optional settings include:
+
+```dotenv
+CHATTERBOX_URL=https://your-authorized-tts-service/v1/audio/speech
+RATE_LIMIT_CHAT=20
+RATE_LIMIT_TTS=120
+RATE_LIMIT_READ=240
+```
+
+Do not configure `GEMINI_API_KEY` on a public backend. With
+`ENVIRONMENT=production`, each generation request must carry the visitor's
+`X-Gemini-Api-Key`.
+
+The default Jina embedding path does not load PyTorch or model weights into the
+API container. A local embedding provider requires
+`requirements-local-embeddings.txt` and substantially more memory.
+
+Verify Render:
+
+```bash
+curl https://your-render-service.onrender.com/health
+```
+
+Free or scale-to-zero hosting can add cold-start latency. The streaming route
+emits an accepted event and periodic heartbeats so the browser can distinguish
+a slow start from a dead request.
+
+## 7. Deploy the frontend to Vercel
+
+Import the repository and set the project root to `frontend`.
+
+Configure:
+
+```dotenv
+DATABASE_URL=postgresql://USER:PASSWORD@HOST/DATABASE?sslmode=require
+AUTH_SECRET=replace_with_a_production_secret
+NEXT_PUBLIC_API_BASE_URL=https://your-render-service.onrender.com
+```
+
+`NEXT_PUBLIC_API_BASE_URL` is embedded into the client build. Redeploy after
+changing it.
+
+After Vercel assigns the production URL, copy that exact origin into Render's
+`CORS_ALLOW_ORIGINS` and restart the backend.
+
+## 8. Verify the deployed system
+
+Run the smoke test against the public API:
+
+```powershell
+$env:SMOKE_API_BASE='https://your-render-service.onrender.com'
+python scripts/smoke_test.py
+```
+
+Then check:
+
+1. account creation and sign-in;
+2. a streamed chat response;
+3. a browser refresh restoring the same session;
+4. session deletion;
+5. full memory reset;
+6. session and global graph views;
+7. browser voice fallback with the cloned service offline.
+
+Microphone and cloned-voice testing require explicit user interaction and
+should be performed manually in a supported browser.
+
+## Database operations
 
 ### Connection limits
 
-Neon's free tier allows fewer concurrent connections than a dedicated Postgres.
-The pool in `main.py` is `min_size=2, max_size=20`, which is fine for one
-backend instance but too high if you run several.
+`backend/app/main.py` creates an asyncpg pool. If the database reports
+connection pressure, lower `max_size` before adding API replicas. Every replica
+creates its own pool.
 
-If you see connection limit errors, lower it:
+### Autosuspend
 
-```python
-# backend/app/main.py
-app.state.db_pool = await asyncpg.create_pool(
-    dsn=db_url, min_size=1, max_size=10, ...
-)
-```
+Neon can suspend idle compute and wake it on the next connection. Keep retry
+logic enabled and expect the first database operation after an idle period to
+be slower.
 
-### Storage
+### Branches and backups
 
-Free tier is 0.5GB. Your corpus is about 11MB of text; with embeddings and
-indexes expect roughly 150 to 250MB. Comfortable, but not unlimited.
+Use a Neon branch or backup before:
 
-### Branching
+- testing destructive migrations;
+- changing embedding dimensions;
+- rebuilding a production corpus;
+- running evaluation scenarios that write memory.
 
-Neon can branch a database like git, copy-on-write. Genuinely useful here: run
-the evaluation harness against a branch so a bad curriculum load or a failed
-migration does not touch your working data.
+### Shared corpus protection
 
-```bash
-# Create a branch in the dashboard, then point at it temporarily
-DATABASE_URL=<branch-connection-string> python scripts/retrieval_eval.py
-```
-
----
-
-## Part 4: Deployment
-
-### The shape
-
-```
-Vercel                Render or Fly.io           Neon
-──────                ────────────────           ────
-Next.js frontend ───► FastAPI backend      ───►  Postgres + pgvector
-                             │
-                             └──────────────►    Kaggle GPU (TTS, optional)
-```
-
-### 4.1 Why the backend cannot go on Vercel
-
-The backend loads `all-mpnet-base-v2` into memory, which needs about 2GB RAM
-and a persistent process. Vercel functions are serverless with tight memory
-limits and cold starts, so the model would reload constantly.
-
-Use a container host. **Render** is simplest; **Fly.io** gives better region
-control, which matters because you want the backend near Neon.
-
-### 4.2 Deploy the backend
-
-The `Dockerfile` is already multi-stage, runs unprivileged, has a healthcheck
-and bakes the embedding model into the image so first request does not pay for
-a 420MB download.
-
-**Render:**
-1. New, Web Service, connect the repository.
-2. Runtime: Docker. Dockerfile path: `./Dockerfile`.
-3. Instance type: **at least 2GB RAM**. The free 512MB tier cannot load the
-   embedding model and will restart in a loop.
-4. Region: the same continent as your Neon project.
-5. Environment variables:
-
-```bash
-DATABASE_URL=<neon direct connection string>
-ENVIRONMENT=production
-CORS_ALLOW_ORIGINS=https://your-frontend.vercel.app
-# No GEMINI_API_KEY. In production every user supplies their own.
-CHATTERBOX_URL=<Kaggle tunnel, or omit for browser speech>
-RATE_LIMIT_CHAT=20
-```
-
-**`ENVIRONMENT=production` matters.** It disables the server-side key fallback,
-so anonymous visitors cannot bill your Gemini quota. Leaving it at
-`development` on a public URL is the single most expensive mistake available.
-
-### 4.3 Deploy the frontend
-
-**Vercel:**
-1. Import the repository, root directory `frontend`.
-2. Environment variable:
-
-```bash
-NEXT_PUBLIC_API_BASE_URL=https://your-backend.onrender.com
-```
-
-`NEXT_PUBLIC_*` values are inlined at build time, so changing this requires a
-redeploy, not just a restart.
-
-3. Deploy, then **go back and set `CORS_ALLOW_ORIGINS` on the backend** to the
-   Vercel URL. The two reference each other, so one of them is always
-   configured second.
-
-### 4.4 Run migrations against production
-
-```bash
-DATABASE_URL=<neon production string> python scripts/migrate.py
-```
-
-Ingestion can run from your laptop against the production database. It is
-network-bound on insert and CPU-bound on embedding, so running it locally is
-fine and avoids paying for compute on the host.
-
-### 4.5 Verify the deployment
-
-```bash
-curl https://your-backend.onrender.com/health
-
-SMOKE_API_BASE=https://your-backend.onrender.com python scripts/smoke_test.py
-```
-
-Then open the frontend and send a message. Watch the backend logs: you should
-see the turn classified, retrieval reporting hits and a cosine score, and
-extraction running in the background.
-
-### 4.6 Before making the URL public
-
-From `docs/POSTURE.md`, and these are not optional:
-
-- `ENVIRONMENT=production` confirmed, so BYOK is enforced.
-- The unofficial-recreation line visible in the interface.
-- `docs/PRIVACY.md` linked, including that free-tier Gemini content may be used
-  for model training.
-- Do not use Andrew Ng's name in the domain.
-- Serve a non-cloned voice publicly. The Kaggle clone is a local demo.
-
----
+Set `CORPUS_TENANT_ID` to the tenant that owns the shared corpus. Full reset
+must never delete that tenant's corpus data.
 
 ## Troubleshooting
 
-| Symptom | Cause | Fix |
+| Symptom | Likely cause | Action |
 |---|---|---|
-| `ENOTFOUND` or `tenant/user not found` | Wrong host or deleted project | Re-copy the connection string |
-| `prepared statement "__asyncpg_" already exists` | Using the pooled endpoint | Use the direct one, without `-pooler` |
-| `SSL required` | Missing SSL parameter | Append `?sslmode=require` |
-| First request slow, then fast | Neon autosuspend waking | Expected. Retry logic handles it |
-| `too many connections` | Pool too large for the tier | Lower `max_size` in `main.py` |
-| Backend restarts in a loop | Under 2GB RAM | Larger instance |
-| Answers ungrounded, `is_grounded: false` everywhere | Corpus not ingested, or index built empty | Ingest, then `REINDEX` |
-| CORS errors in the browser | `CORS_ALLOW_ORIGINS` missing the frontend URL | Set it exactly, including `https://` |
+| Connection timeout or DNS failure | Incorrect or expired connection string | Copy the current direct Neon connection string |
+| SSL error | Missing SSL requirement | Add `?sslmode=require` |
+| Prepared-statement error | Transaction pooler used with default asyncpg settings | Use the direct endpoint or configure pooler-compatible connections |
+| Migration checksum warning | An applied SQL file was edited | Restore it and create a new migration |
+| Corpus disappears while applying migration 014 | Expected destructive vector-width migration | Restore from backup or re-ingest the corpus |
+| Every response is ungrounded | Corpus absent, wrong embedding provider, or dimension mismatch | Run the smoke test and compare provider, model, and dimensions |
+| CORS failure | Vercel origin missing or not exact | Set the complete HTTPS origin in `CORS_ALLOW_ORIGINS` |
+| Backend restarts with local embeddings | Container lacks memory for PyTorch and model weights | Use Jina or allocate a larger instance |
+| Sign-in works locally but not on Vercel | Missing frontend database URL or Auth.js secret | Configure `DATABASE_URL` and `AUTH_SECRET` in Vercel |
 
----
+## Security checklist
 
-## Cost
-
-| Component | Free tier | If you outgrow it |
-|---|---|---|
-| Neon | 0.5GB storage, autosuspend | ~$19/mo |
-| Render backend | Not viable, needs 2GB | ~$7 to $25/mo |
-| Vercel frontend | Generous, fine indefinitely | free |
-| Gemini | Users bring their own keys | $0 to you |
-| Kaggle GPU | 30 GPU hours weekly | free |
-
-The BYOK design means the expensive part, generation, costs you nothing. Your
-floor is the backend instance.
+- Keep `.env` and `frontend/.env.local` out of Git.
+- Rotate any credential pasted into a chat, issue, log, or screenshot.
+- Use different Auth.js secrets for local and production environments.
+- Leave the production backend `GEMINI_API_KEY` unset.
+- Restrict CORS to the production frontend origin.
+- Keep the voice reference sample private.
+- Review [`PRIVACY.md`](PRIVACY.md) and [`POSTURE.md`](POSTURE.md) before making
+  the deployment public.
