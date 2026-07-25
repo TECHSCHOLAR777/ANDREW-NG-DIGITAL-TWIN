@@ -1,282 +1,474 @@
-# Andrew Ng Digital Twin 🎓🤖
+<div align="center">
 
-An interactive, AI-powered digital twin of Professor Andrew Ng — a grounded, unofficial recreation of his public knowledge, reasoning, and voice. It is built for researchers, engineers, founders, product and business leaders, students, and the curious; teaching ML is one of its behaviours, not its whole purpose. Rather than a standard, stateless RAG chatbot, this system implements a dynamic contextual-memory knowledge graph that tracks the context you share, matches depth to your background (PhD vs. beginner, founder vs. researcher), and remembers you across chat sessions.
+<h1>Andrew Ng Digital Twin</h1>
 
----
+<h3>An unofficial, source-grounded conversational recreation of Andrew Ng's public teaching and writing</h3>
 
-## 🏗️ Architecture & How It Works
+<p>It combines hybrid retrieval, persistent contextual memory, an inspectable knowledge graph, and optional synthetic speech in one web application.</p>
 
-When you interact with the digital twin:
-1. **Client Headers & BYOK:** The frontend communicates with the FastAPI backend using standard UUID-based multi-tenancy (`X-Tenant-Id`) and an optional client-supplied key (`X-Gemini-Api-Key`). These are persisted in browser local storage.
-2. **Hybrid RAG Retrieval:** The backend embeds user queries with the configured embedding provider (default **Jina `jina-embeddings-v3`, 1024-dimensional vectors** — see migration 014; a local `all-mpnet-base-v2` SentenceTransformer remains an option for offline/dev). Query and corpus vectors share the same space. It runs a PostgreSQL function combining vector cosine similarity (via `pgvector`) and Full-Text Search (FTS) using **Reciprocal Rank Fusion (RRF)**.
-3. **Dual-Scope Memory:**
-   - **Cross-Session Recall:** A recursive 2-hop CTE database query retrieves the student's global learning state across all chat history associated with the `X-Tenant-Id`.
-   - **Session-Scoped Visual Graph:** The interactive graph displays only the triplets discovered or updated in the current active chat session.
-4. **Context Caching:** The static persona is placed first so current Gemini models can apply implicit prefix caching. Retrieved corpus passages stay fresh for every turn instead of being frozen into a stale session cache.
-5. **Background Triplet Extraction:** After sending a response, FastAPI spawns a non-blocking background task. A specialized Gemini call parses the turn to extract subject-predicate-object (SPO) triplets (e.g. `(Student, struggles_with, Gradient Descent)`).
-6. **Entity Resolution:** The backend runs trigram fuzzy matching to resolve synonyms or abbreviations (e.g., merging "backprop" into "Backpropagation") before persisting nodes.
-7. **Voice Interaction:** The system supports hands-free audio. The UI uses the browser's Web Speech API for voice-to-text, and synthesizes audio via either a local cloned-voice server (Chatterbox on port 5002) or native browser text-to-speech.
+<p>
+  <a href="https://digital-twin-kohl-six.vercel.app/">
+    <img src="https://img.shields.io/badge/Live_demo-Open_the_twin-ff6b1a?style=for-the-badge" alt="Open the live demo">
+  </a>
+  <a href="https://github.com/TECHSCHOLAR777/DIGITAL-TWIN/actions/workflows/tests.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/TECHSCHOLAR777/DIGITAL-TWIN/tests.yml?branch=master&style=for-the-badge&label=Build" alt="Build status">
+  </a>
+</p>
 
----
+<p>
+  <img src="https://img.shields.io/badge/Next.js-16-111111?logo=nextdotjs" alt="Next.js 16">
+  <img src="https://img.shields.io/badge/React-19-20232a?logo=react" alt="React 19">
+  <img src="https://img.shields.io/badge/FastAPI-2.0_API-009688?logo=fastapi" alt="FastAPI">
+  <img src="https://img.shields.io/badge/PostgreSQL-pgvector-4169e1?logo=postgresql" alt="PostgreSQL with pgvector">
+  <img src="https://img.shields.io/badge/Gemini-BYOK-8e75b2?logo=googlegemini" alt="Gemini bring your own key">
+</p>
 
-## 📂 Directory Structure
+<p>
+  <a href="https://digital-twin-kohl-six.vercel.app/">Live application</a>
+  &nbsp;&middot;&nbsp;
+  <a href="https://digital-twin-kohl-six.vercel.app/understand">How it works</a>
+  &nbsp;&middot;&nbsp;
+  <a href="#privacy-and-data-boundaries">Privacy</a>
+  &nbsp;&middot;&nbsp;
+  <a href="#responsible-use">Responsible use</a>
+</p>
 
+<sub>
+This project is not affiliated with, endorsed by, or reviewed by Andrew Ng, Stanford University, or DeepLearning.AI. Responses are generated and are not real quotations. Any cloned voice is synthetic.
+</sub>
+
+</div>
+
+<br>
+
+<p align="center">
+  <a href="https://digital-twin-kohl-six.vercel.app/">
+    <img src="docs/assets/landing-page.webp" alt="Andrew Ng Digital Twin production landing page" width="100%">
+  </a>
+</p>
+
+## What this project is
+
+Andrew Ng Digital Twin is a full-stack conversational system built around Andrew Ng's publicly available educational material. The current corpus contains 529 cleaned source documents and about 1.7 million words from lectures, course notes, books, newsletters, interviews, and public writing.
+
+The application retrieves relevant passages before answering, adjusts the depth and framing to the person asking, and carries useful context across sessions. It can answer in streamed text, expose the passages and memory graph behind a response, or run as a hands-free voice conversation.
+
+This is an engineering and research project, not a claim to reproduce a real person. The system identifies itself as an unofficial recreation, keeps the synthetic-voice disclosure visible, and should not be used to attribute new statements to Andrew Ng.
+
+## Product capabilities
+
+| Capability | What it does |
+|---|---|
+| Grounded conversation | Searches Andrew Ng's public corpus with semantic and keyword retrieval before generating a response. |
+| Adaptive explanations | Changes notation, depth, pacing, and examples for researchers, engineers, founders, product leaders, and learners. |
+| Contextual memory | Extracts useful facts and relationships from conversations into a tenant-scoped, time-aware graph. |
+| Persistent sessions | Stores chat sessions and restores them after sign-in. Account passwords are stored as bcrypt hashes and Auth.js uses JWT sessions. |
+| Inspectable evidence | Shows retrieved passages, grounding state, and a session or global view of the memory graph. |
+| Streamed responses | Sends progress events and generated tokens over Server-Sent Events so the interface remains responsive during retrieval and generation. |
+| Interactive voice | Uses browser speech recognition for input and sentence-level speech playback for low perceived latency. |
+| Voice fallback | Uses the Chatterbox clone when its GPU service is reachable and switches to a pinned browser voice when it is not. |
+| Bring your own key | Accepts a Gemini API key from each user. Production disables the server-side fallback key. |
+| User-controlled deletion | Supports individual session deletion, graph-edge correction, and a full reset of tenant-scoped chat and memory data. |
+
+## System architecture
+
+```mermaid
+flowchart LR
+    Browser["Browser<br/>Next.js 16 and React 19"]
+    API["FastAPI API<br/>routing, orchestration, rate limits"]
+    Retrieval["Hybrid retrieval<br/>pgvector + PostgreSQL FTS + RRF"]
+    Memory["Context memory<br/>temporal graph + curriculum"]
+    Database[("PostgreSQL<br/>pgvector")]
+    Gemini["Gemini models<br/>user-provided key"]
+    TTS["TTS broker"]
+    Clone["Chatterbox clone<br/>optional Kaggle GPU"]
+    Fallback["Browser speech<br/>fallback"]
+    Speech["Browser speech<br/>recognition"]
+
+    Browser -->|"SSE chat and REST"| API
+    API --> Retrieval
+    API --> Memory
+    Retrieval --> Database
+    Memory --> Database
+    API --> Gemini
+    Gemini -->|"streamed tokens"| API
+    API -->|"SSE events"| Browser
+    Browser --> Speech
+    API --> TTS
+    TTS --> Clone
+    Clone --> Browser
+    Browser -. "when clone is unavailable" .-> Fallback
+    Fallback --> Browser
 ```
-├── backend/
-│   ├── app/
-│   │   ├── main.py              # FastAPI server entrypoint (lifespan hook, DB pool, model preloading)
-│   │   ├── routers/
-│   │   │   └── chat.py          # /message, /graph/{session_id}, /clear, and /tts endpoints
-│   │   └── services/
-│   │       ├── prompt_cache.py  # Prompt compiler, context assembly, and Gemini context caching
-│   │       └── triplet_extractor.py # Background SPO triplet extraction and entity resolution
-│   └── migrations/
-│       ├── 001_knowledge_graph_schema.sql  # Base entities, relationships, and grounding chunks tables
-│       ├── 002_entity_resolution_and_traversal.sql # 2-hop CTE query & fuzzy resolution database function
-│       ├── 003_hybrid_retrieval_rrf.sql     # RRF hybrid search stored procedure
-│       ├── 004_production_hardening.sql     # Database indexes (trigram, GIN, vector index)
-│       └── 005_session_scoped_relations.sql # [NEW] Graph session isolation columns & updated traversal functions
-├── frontend/
-│   ├── src/
-│   │   ├── app/
-│   │   │   ├── page.tsx         # Responsive Chat UI, voice handlers, and memory controls
-│   │   │   ├── layout.tsx       # Root layout configuration
-│   │   │   └── globals.css      # Core Tailwind CSS v4 directives
-│   │   ├── components/
-│   │   │   └── KnowledgeGraphView.tsx # Interactive graph rendering with React Flow & D3-force layout
-│   │   ├── lib/
-│   │   │   └── graphMapper.ts   # Maps DB tables to React Flow nodes/edges with predicate coloring
-│   │   └── types/
-│   │       └── graph.ts         # TypeScript schema definitions for graph nodes and relations
-│   ├── package.json             # Next.js 16, React 19, @xyflow/react (React Flow 12), and Tailwind CSS v4
-│   └── tsconfig.json
-├── scripts/
-│   ├── ingest_supabase.py       # Seeds the Supabase database with grounded materials and local embeddings
-│   ├── clean_text.py            # Text corpus normalizer
-│   ├── collect_*.py             # Raw data scrapers (blog posts, PDFs, transcripts, etc.)
-│   ├── generate_conversations.py# Context generator script
-│   ├── chunking.py              # Structure-aware chunking (headings, overlap)
-│   ├── build_curriculum.py      # Offline prerequisite DAG extraction
-│   ├── migrate.py               # Applies migrations in order, records them
-│   └── eval/                    # Retrieval, persona and memory evaluation
-├── legacy/                      # Superseded version one, kept for reference
-├── run_chatterbox_server.py     # Local TTS clone server runner
-├── architecture.md              # Deep dive system design details
-├── requirements.txt             # Python dependencies
-└── Dockerfile                   # Deployment container
+
+The deployed system uses Vercel for the frontend, Render for the FastAPI service, Neon for PostgreSQL and pgvector, and an optional Kaggle GPU notebook for cloned speech.
+
+## What happens during a turn
+
+```mermaid
+sequenceDiagram
+    participant UI as Next.js client
+    participant API as FastAPI
+    participant DB as PostgreSQL + pgvector
+    participant LLM as Gemini
+    participant Voice as TTS service
+
+    UI->>API: POST /api/v1/chat/stream
+    API->>DB: Load session, learner state, and graph context
+    API->>DB: Hybrid vector and full-text retrieval
+    DB-->>API: Ranked passages and relevant memory
+    API->>LLM: Persona, evidence, memory, and user question
+    LLM-->>API: Generated response stream
+    API-->>UI: Progress, token, citation, and completion events
+    opt Interactive voice
+        UI->>API: Sentence-level TTS request
+        API->>Voice: Synthesize one sentence
+        Voice-->>UI: Audio or unavailable status
+        UI-->>UI: Use browser speech when unavailable
+    end
+    API-->>LLM: Extract memory facts in the background
+    API-->>DB: Resolve entities and update temporal relations
 ```
 
----
+The retrieval path combines pgvector cosine similarity with PostgreSQL full-text search using Reciprocal Rank Fusion. Adjacent chunks are added when they preserve definitions or notation that a top result depends on. If the best semantic match is below the configured confidence threshold, the response is marked ungrounded instead of presenting weak evidence as authoritative.
 
-## Setup status
+The memory update runs after the answer is sent. Entity aliases are resolved before facts are stored, and later corrections retire old relations instead of leaving contradictory versions active.
 
-Run this first. It checks every layer and names exactly what is missing:
+## Technology
+
+| Layer | Main components |
+|---|---|
+| Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS 4, Auth.js 5 |
+| Conversation UI | Server-Sent Events, React Markdown, KaTeX, browser Web Speech APIs |
+| Graph UI | React Flow 12, D3 force layout |
+| Backend | Python 3.11, FastAPI, asyncpg, Pydantic, httpx |
+| Generation | Gemini generation and utility models through per-request clients |
+| Retrieval | Jina embeddings by default, pgvector, PostgreSQL full-text search, RRF |
+| Memory | Temporal entity graph, alias resolution, session and tenant isolation |
+| Voice | Chatterbox Turbo clone service with browser speech-synthesis fallback |
+| Deployment | Vercel, Render, Neon, Kaggle, Cloudflare quick tunnel |
+
+## Repository map
+
+```text
+.
+|-- backend/
+|   |-- app/
+|   |   |-- main.py                 FastAPI application and database pool
+|   |   |-- routers/chat.py         Chat, stream, history, graph, reset, and TTS routes
+|   |   `-- services/               Retrieval, memory, persona, models, and extraction
+|   |-- migrations/                 17 ordered PostgreSQL and pgvector migrations
+|   `-- tests/                      Offline backend regression tests
+|-- frontend/
+|   |-- src/app/page.tsx            Public landing page
+|   |-- src/app/app/page.tsx        Main conversation workspace
+|   |-- src/app/understand/         Product and pipeline explanation
+|   |-- src/components/             Chat, graph, auth, voice, and marketing UI
+|   `-- public/                      Static assets
+|-- scripts/
+|   |-- collect_*.py                Public-source collection tools
+|   |-- clean_text.py               Corpus normalization
+|   |-- ingest_supabase.py          Chunking, embedding, and database ingestion
+|   |-- migrate.py                  Ordered, checksummed migration runner
+|   |-- smoke_test.py               Dependency and deployment diagnostics
+|   `-- eval/                       Retrieval, persona, and memory evaluation
+|-- notebooks/
+|   `-- kaggle_tts_server.ipynb     Optional GPU voice service
+|-- docs/                            Privacy, deployment, voice, and posture guides
+|-- legacy/                          Superseded first version, retained for reference
+`-- Dockerfile                      Lean backend runtime image
+```
+
+## Run it locally
+
+### Prerequisites
+
+- Python 3.11 or newer
+- Node.js 20 or newer
+- PostgreSQL 16 with the `vector` extension, or a compatible hosted database such as Neon
+- A Jina API key for the default embedding provider
+- A Gemini API key entered in the application, or a development-only backend fallback key
+- Optional: an NVIDIA GPU or Kaggle notebook for the cloned voice
+
+### 1. Clone and install the backend
 
 ```bash
-python scripts/smoke_test.py
+git clone https://github.com/TECHSCHOLAR777/DIGITAL-TWIN.git
+cd DIGITAL-TWIN
+
+python -m venv .venv
 ```
 
-**No local GPU?** The cloned voice runs on a free Kaggle T4 via
-[notebooks/kaggle_tts_server.ipynb](notebooks/kaggle_tts_server.ipynb). Without
-it, voice falls back to browser speech synthesis automatically.
+Activate the virtual environment:
 
-**Guides**
+```bash
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
 
-| Guide | Covers |
-|---|---|
-| [docs/NEON_SETUP.md](docs/NEON_SETUP.md) | Database setup and full deployment |
-| [docs/VOICE_SETUP.md](docs/VOICE_SETUP.md) | Cloned voice on a Kaggle GPU, and voice mode |
-| [scripts/eval/README.md](scripts/eval/README.md) | Retrieval, persona and memory evaluation |
-| [docs/PRIVACY.md](docs/PRIVACY.md) | What is stored and where it goes |
-| [docs/POSTURE.md](docs/POSTURE.md) | Affiliation, corpus rights, voice cloning policy |
+# macOS or Linux
+source .venv/bin/activate
+```
 
----
+Install the runtime dependencies:
 
-## ⚙️ Configuration & Environment Variables
+```bash
+pip install -r requirements.txt
+```
 
-Create a `.env` file in the root directory:
+### 2. Configure the backend
+
+Copy `.env.example` to `.env`, then set at least:
 
 ```env
-DATABASE_URL=postgresql+asyncpg://postgres:your_supabase_password@db.your_supabase_project.supabase.co:5432/postgres
-GEMINI_API_KEY=your_gemini_api_key_here
-CORPUS_TENANT_ID=optional_uuid_that_owns_the_shared_andrew_corpus
-MAX_TTS_CHARS=1200
-CORS_ALLOW_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+DATABASE_URL=postgresql://USER:PASSWORD@HOST/DATABASE?sslmode=require
 ENVIRONMENT=development
+CORS_ALLOW_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 
-# Text-to-speech service (defaults to the local Chatterbox server)
-CHATTERBOX_URL=http://127.0.0.1:5002/v1/audio/speech
-
-# Retrieval tuning (all optional, shown with their defaults)
 EMBED_PROVIDER=jina
-JINA_API_KEY=                    # required by the default provider
-JINA_EMBED_MODEL=jina-embeddings-v3
+JINA_API_KEY=your_jina_key
 EMBED_DIMS=1024
-EMBED_MODEL=all-mpnet-base-v2    # used only with EMBED_PROVIDER=local
-EMBED_WORKERS=2
-RETRIEVAL_NEIGHBOR_WINDOW=1      # chunks pulled either side of each hit
-RETRIEVAL_RRF_K=60
-RETRIEVAL_VECTOR_WEIGHT=0.65
-RETRIEVAL_FTS_WEIGHT=0.35
-RETRIEVAL_MIN_COSINE=0.35        # below this the answer is flagged ungrounded
-ENABLE_QUERY_REWRITE=true        # rewrite follow-ups into standalone questions
-GEMINI_MODEL=gemini-3.6-flash    # main conversational model
-GEMINI_UTILITY_MODEL=gemini-3.5-flash-lite
-MAX_CACHE_MANAGERS=128           # bound on cached per-key prompt managers
+
+# Optional in development. Leave unset in production.
+GEMINI_API_KEY=
+
+# Optional cloned-voice service.
+CHATTERBOX_URL=http://127.0.0.1:5002/v1/audio/speech
 ```
 
-> [!WARNING]
-> `ENVIRONMENT=production` enforces true BYOK: the server-side `GEMINI_API_KEY`
-> fallback is disabled and every request must carry the user's own key. Leaving
-> this at `development` on a public deployment means anonymous visitors bill your key.
-
-> [!NOTE]
-> The backend accepts client-provided keys sent via the `X-Gemini-Api-Key` header. If missing, it falls back to the backend's `.env` key.
-> `CORPUS_TENANT_ID` is optional. If omitted, retrieval treats `knowledge_chunks` as a shared corpus and searches all ingested chunks while keeping user memory tenant-scoped.
-
-### Database Migrations
-The ordered SQL files in `backend/migrations/` are the database history. Run
-`python scripts/migrate.py`; it applies only outstanding files in order, records
-their checksums in `schema_migrations`, and supports `--status` and `--dry-run`.
-Do not edit a migration after it has been applied—add the next numbered file.
-
 > [!IMPORTANT]
-> Migration 008 replaces the IVFFlat vector indexes with HNSW. The originals were
-> created before any data was ingested, so their centroids were trained on an empty
-> table and recall was silently degraded. Run it after your corpus is ingested.
+> Corpus ingestion and request-time retrieval must use the same embedding provider, model, and dimensions. Mixing embedding spaces can return plausible but unrelated passages without producing an obvious runtime error.
 
----
-
-## Curriculum graph
-
-Every concept in the memory graph comes from conversation, which means it only
-ever knows things a student has already mentioned. The curriculum layer adds
-the other half: a prerequisite DAG over machine learning concepts, extracted
-once from the corpus rather than from any user.
-
-The student graph then becomes an overlay on it. The curriculum says what
-depends on what; the student layer says where this person is. Three things
-become computable that a prompt cannot do:
-
-- **Learning paths.** Given a target concept, a topological sort over the
-  prerequisites the student has not yet mastered. The same target yields a
-  short path for an advanced learner and a long one for a beginner.
-- **Root cause diagnosis.** When several separate confusions share one upstream
-  prerequisite, that prerequisite is the real problem. A student stuck on
-  backpropagation, gradient descent and Adam does not have three problems.
-- **Pedagogical retrieval.** If the question depends on a concept the student
-  is shaky on, material for that concept is retrieved too, even though the
-  question never mentioned it.
+Apply all outstanding migrations:
 
 ```bash
-# One-time build. A few hundred model calls over the structured documents.
-python scripts/build_curriculum.py --out data/baselines/curriculum.json
+python scripts/migrate.py
+python scripts/migrate.py --status
+```
 
-# Review the JSON, correct anything wrong, then load it.
+The migration runner records checksums in `schema_migrations`. Do not edit a migration after it has been applied. Add the next numbered migration instead.
+
+### 3. Prepare a corpus
+
+The production database is already populated, but the repository does not redistribute the collected source text. To build a database from source material, install the collection dependencies and run the pipeline:
+
+```bash
+pip install -r requirements-ingest.txt
+
+python scripts/collect_pdfs.py
+python scripts/collect_transcripts.py
+python scripts/collect_the_batch.py
+python scripts/collect_blog_posts.py
+python scripts/clean_text.py
+python scripts/ingest_supabase.py
+```
+
+Review each source's terms and licensing before collecting or redistributing material. Some collectors may also expect user-supplied files. The ingestion script is resumable and refuses to mix incompatible embedding models.
+
+The optional curriculum graph is built separately:
+
+```bash
+python scripts/build_curriculum.py --out data/baselines/curriculum.json
+# Review the generated file before loading it.
 python scripts/build_curriculum.py --load data/baselines/curriculum.json
 ```
 
-The output is a reviewable, versioned artifact rather than an opaque table, so
-a bad extraction is a diff. Everything degrades gracefully when no curriculum
-is loaded: the product behaves exactly as it did before, without prerequisite
-reasoning.
-
----
-
-## Evaluation
-
-The project measures itself in three layers. Details in
-[`scripts/eval/README.md`](scripts/eval/README.md).
+### 4. Start the API
 
 ```bash
-# Unit tests: chunking, sanitisation, routing, persona validators. No API key.
-for f in backend/tests/test_*.py; do python "$f"; done
-
-# Style baseline measured from the real corpus. Offline, about a minute.
-python scripts/eval/corpus_style.py --save data/baselines/corpus_style.json
-
-# Persona: rule violations plus distance from that measured style.
-python scripts/eval/persona_eval.py
-
-# Retrieval: recall@k, MRR, abstention calibration, feature ablations.
-python scripts/eval/golden_set.py --n 100 --negatives 20
-python scripts/eval/retrieval_eval.py --ablate
-
-# Memory: scripted multi-session scenarios asserting what the graph believes.
-python scripts/eval/memory_eval.py
+python -m uvicorn backend.app.main:app --reload --port 8000
 ```
 
-CI runs the offline subset plus a job that applies every migration in order
-against pgvector, so ordering and syntax errors are caught before Supabase.
+Useful local endpoints:
 
----
+- Health: `http://127.0.0.1:8000/health`
+- OpenAPI: `http://127.0.0.1:8000/docs`
 
-## 🚀 Installation & Setup
+API documentation is disabled when `ENVIRONMENT=production`.
 
-### 1. Backend Setup
-1. Install requirements:
-   ```bash
-   pip install -r requirements.txt
-   ```
-2. Ingest grounding materials:
-   ```bash
-   python scripts/ingest_supabase.py
-   ```
-   *This loads files under `data/cleaned/`, computes embeddings with the configured provider (default Jina, 1024-dim — set `EMBED_PROVIDER` and the matching key in `.env`), and writes them to your database. Query-time and ingest-time embeddings must use the same provider so the vectors share one space.*
-3. Run the FastAPI backend:
-   ```bash
-   python -m uvicorn backend.app.main:app --reload
-   ```
-   *The server runs on `http://127.0.0.1:8000`. With the default Jina provider it calls the Jina API for embeddings; with `EMBED_PROVIDER=local` it preloads `all-mpnet-base-v2` on startup instead.*
+### 5. Configure and start the frontend
 
-### 2. Cloned-Voice TTS (Optional)
-To enable high-fidelity voice cloning rather than generic browser TTS:
-1. Install voice requirements:
-   ```bash
-   pip install chatterbox-tts torchaudio soundfile
-   ```
-2. Place your reference audio file named `andrew_ng_ref.wav` into `backend/data/`.
-3. Start the local speech server:
-   ```bash
-   python run_chatterbox_server.py
-   ```
-   *The TTS service listens on port `5002`. The backend will automatically direct `/tts` requests to it.*
+Create `frontend/.env.local`:
 
-### 3. Frontend Setup
-1. Navigate to the folder:
-   ```bash
-   cd frontend
-   ```
-2. Install packages and start the Next.js server:
-   ```bash
-   # Optional: point the UI at a non-local backend
-   # NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
-   npm install
-   npm run dev
-   ```
-3. Open `http://localhost:3000` in your browser.
+```env
+NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
+DATABASE_URL=postgresql://USER:PASSWORD@HOST/DATABASE?sslmode=require
+AUTH_SECRET=replace_with_a_long_random_secret
+```
 
----
+The frontend and backend must point to the same database because the Next.js server handles account creation and authentication while FastAPI owns conversation data.
 
-## 🧪 E2E Verification Walkthrough
+```bash
+cd frontend
+npm ci
+npm run dev
+```
 
-To verify that the system is functioning correctly, go through this multi-session pipeline:
+Open `http://localhost:3000`.
 
-### Session 1: Concept Explanations & Persona Calibration
-1. **Clean Slate:** Click **Reset learning memory** to ensure a blank graph.
-2. **Greeting:** Type: *"Hi, I'm Michael and I'm a product manager at a retail firm. I want to build a customer support routing system."*
-   - *Check:* Response must be written in the first person, engage the topic immediately (no *"Great question!"* or boilerplate openers), and ask for input/output definitions.
-   - *Graph (after 12s, hit Sync):* The graph displays a Student node labeled **Michael** with edges connecting to **Product Manager** and **Retail**.
-3. **Analogy Check:** Ask: *"Can you explain what gradient descent is?"*
-   - *Check:* The response must use the **walking downhill in thick fog** analogy, follow a example-first format, and avoid bullet-point lists or markdown headers.
+### Docker Compose
 
-### Session 2: Target Calibration (Researcher Mode)
-1. **New Session:** Click **New Chat** (this isolates the active graph session but preserves global memory).
-2. **Introduce Priya:** Type: *"I'm Priya, a PhD student working on attention. Can you explain self-attention?"*
-   - *Check:* The backend detects a technical student and skips hand-holding, using advanced terms like Query/Key/Value matrices directly.
-   - *Graph:* Toggling **Session View** shows only Priya's attention graph. Toggling **Global View** shows both Michael's retail-routing graph and Priya's attention graph.
+If the database is already available and `.env` is configured:
 
-### Session 3: Cross-Session Recall
-1. **New Session:** Click **New Chat**.
-2. **Query:** Type: *"Hi, I'm Michael again. What were we discussing earlier?"*
-   - *Check:* The backend queries the global tenant memory and recalls Michael's retail-routing project and gradient descent discussion from Session 1.
+```bash
+docker compose up --build
+```
+
+Compose starts the frontend and API. It does not start PostgreSQL or the GPU voice service.
+
+## Configuration reference
+
+The complete list and current defaults live in [`.env.example`](.env.example). These are the variables most operators need:
+
+| Variable | Used by | Purpose |
+|---|---|---|
+| `DATABASE_URL` | Backend and frontend | PostgreSQL connection used for domain data and accounts. |
+| `ENVIRONMENT` | Backend | Enables development helpers or production BYOK enforcement. |
+| `CORS_ALLOW_ORIGINS` | Backend | Comma-separated frontend origins allowed to call the API. |
+| `JINA_API_KEY` | Backend and ingestion | Authenticates the default embedding provider. |
+| `EMBED_PROVIDER` | Backend and ingestion | Selects `jina`, `voyage`, `gemini`, or `local`. |
+| `EMBED_DIMS` | Backend and database | Vector width. The deployed corpus uses 1024 dimensions. |
+| `GEMINI_API_KEY` | Backend, development only | Optional fallback for local development and offline tooling. |
+| `GEMINI_MODEL` | Backend | Main conversational generation model. |
+| `GEMINI_UTILITY_MODEL` | Backend | Default model for query rewriting and graph extraction. |
+| `CHATTERBOX_URL` | Backend | OpenAI-compatible endpoint for cloned speech. |
+| `CORPUS_TENANT_ID` | Backend and ingestion | Protects the stable shared-corpus tenant from reset operations. |
+| `NEXT_PUBLIC_API_BASE_URL` | Frontend | Public FastAPI origin, embedded into the client build. |
+| `AUTH_SECRET` | Frontend | Signs Auth.js JWT sessions. |
+
+> [!WARNING]
+> Set `ENVIRONMENT=production` on every public backend and do not configure a production `GEMINI_API_KEY`. Production requests must carry the visitor's `X-Gemini-Api-Key` header so one server-owned key cannot be billed by anonymous users.
+
+In the browser, the Gemini key is kept in `sessionStorage`, not persistent local storage. The backend uses it for the active request and does not write it to the database.
+
+## Key API routes
+
+All conversation routes use the `/api/v1/chat` prefix.
+
+| Method and route | Purpose |
+|---|---|
+| `POST /stream` | Stream progress, answer tokens, grounding data, and completion metadata. |
+| `POST /message` | Return a non-streamed response for API clients and tests. |
+| `GET /sessions` | List the caller's stored sessions. |
+| `GET /sessions/{id}/messages` | Restore a session transcript. |
+| `DELETE /sessions/{id}` | Delete one session and its scoped relations. |
+| `GET /graph/{session_id}` | Load the session or global memory graph. |
+| `DELETE /graph/edge/{edge_id}` | Remove an incorrect relationship. |
+| `POST /clear` | Reset tenant-scoped sessions, turns, entities, aliases, and relations. |
+| `GET /tts/status` | Report whether the cloned-voice service is currently reachable. |
+| `POST /tts` | Proxy one sentence to the cloned-voice service. |
+| `GET /curriculum/path` | Build a prerequisite-aware path toward a target concept. |
+
+Conversation calls require:
+
+```http
+X-Tenant-Id: <uuid>
+X-Gemini-Api-Key: <user key>
+```
+
+The tenant header isolates conversation and memory data. Production does not silently replace a missing user key with a server key.
+
+## Voice mode
+
+Voice mode is split into three independent parts:
+
+1. The browser's speech-recognition API turns microphone input into text.
+2. The normal chat pipeline streams the answer and emits complete sentences as they become available.
+3. Each sentence is synthesized by the Chatterbox service or sent directly to the configured browser voice when the clone is unavailable.
+
+The cloned service is optional because GPU notebook sessions and tunnel URLs are temporary. The UI checks availability before playback, identifies the active provider, and can continue the conversation through browser speech instead of waiting for an unreachable GPU.
+
+To run the clone on Kaggle, use [`notebooks/kaggle_tts_server.ipynb`](notebooks/kaggle_tts_server.ipynb) and follow [the voice setup guide](docs/VOICE_SETUP.md). The notebook prints a new `CHATTERBOX_URL` whenever its tunnel is restarted. The application must keep the synthetic-voice disclosure visible regardless of provider.
+
+## Privacy and data boundaries
+
+- Conversation turns, sessions, account context, and graph memory are stored in PostgreSQL under a tenant UUID.
+- Account passwords are stored only as bcrypt hashes.
+- The Gemini key is held in browser session storage and sent with generation requests. It is not persisted by the application.
+- Microphone audio is handled by the browser speech-recognition provider. The application sends recognized text to its backend.
+- The app does not store generated TTS audio as conversation data.
+- Session deletion and full reset operations are tenant-scoped.
+- Requests to Gemini, the embedding provider, and the optional TTS service leave the application boundary.
+
+Review these boundaries against the policies of every model, embedding, speech-recognition, and hosting provider before operating a public instance.
+
+## Testing and evaluation
+
+The repository separates deterministic checks from evaluations that need a live database or model key.
+
+```bash
+# Backend regression tests
+for file in backend/tests/test_*.py; do python "$file" || exit 1; done
+
+# Frontend checks
+cd frontend
+npx tsc --noEmit
+npm run lint
+npm run build
+
+# Database and service diagnostics
+cd ..
+python scripts/migrate.py --status
+python scripts/smoke_test.py
+```
+
+CI runs the offline backend tests, the frontend type and production builds, and all 17 migrations against PostgreSQL 16 with pgvector.
+
+The evaluation suite measures:
+
+- retrieval recall, reciprocal rank, abstention, and feature ablations;
+- persona-rule violations and distance from corpus-measured style;
+- multi-session memory creation, revision, isolation, and deletion.
+
+See [`scripts/eval/README.md`](scripts/eval/README.md) for commands, required credentials, and interpretation.
+
+## Deployment
+
+The public instance is split across four services:
+
+| Component | Platform | Operational note |
+|---|---|---|
+| Frontend and authentication | Vercel | `NEXT_PUBLIC_API_BASE_URL` is fixed at build time. |
+| FastAPI backend | Render | `/health` is public; free instances can cold start. |
+| PostgreSQL and pgvector | Neon | Shared corpus and tenant-scoped user data live in one database. |
+| Cloned voice | Kaggle GPU | Optional and ephemeral; the Cloudflare tunnel URL changes after restart. |
+
+For a production deployment:
+
+1. Apply every database migration.
+2. Set the same `DATABASE_URL` for Vercel and Render.
+3. Set `AUTH_SECRET` and `NEXT_PUBLIC_API_BASE_URL` on Vercel.
+4. Set `ENVIRONMENT=production`, `JINA_API_KEY`, and the exact Vercel origin in `CORS_ALLOW_ORIGINS` on Render.
+5. Leave the Render `GEMINI_API_KEY` unset.
+6. Set `CHATTERBOX_URL` only while a disclosed synthetic-voice service is running.
+7. Run `python scripts/smoke_test.py` against the finished environment.
+
+The repository includes a scheduled GitHub Actions health ping for the current Render service. Treat it as a best-effort availability measure, not a replacement for production monitoring.
+
+## Known constraints
+
+- Generated answers can still be incomplete or wrong, even when retrieved passages are relevant.
+- The public corpus is a curated snapshot, not a complete or official archive of Andrew Ng's work.
+- Browser speech recognition and browser voices vary by operating system and browser.
+- The cloned voice depends on a temporary GPU session and tunnel.
+- Free hosting can add cold-start latency.
+- Live persona and retrieval evaluations consume external API quota.
+- The collected source corpus is intentionally absent from Git history.
+
+## Documentation
+
+| Document | Contents |
+|---|---|
+| [`architecture.md`](architecture.md) | Deeper backend, retrieval, memory, and database design notes |
+| [`persona_contract.md`](persona_contract.md) | Behavioural contract and disclosure rules |
+| [`andrew_ng_digital_twin_system_prompt.md`](andrew_ng_digital_twin_system_prompt.md) | Persona and response-policy reference |
+| [`docs/VOICE_SETUP.md`](docs/VOICE_SETUP.md) | Local and Kaggle voice configuration |
+| [`docs/NEON_SETUP.md`](docs/NEON_SETUP.md) | Hosted PostgreSQL and deployment setup |
+| [`docs/PRIVACY.md`](docs/PRIVACY.md) | Storage, third-party processing, and deletion boundaries |
+| [`docs/POSTURE.md`](docs/POSTURE.md) | Affiliation, corpus, portrait, and synthetic-voice posture |
+| [`scripts/eval/README.md`](scripts/eval/README.md) | Retrieval, persona, and memory evaluation |
+
+## Responsible use
+
+Use the project as an educational system and an experiment in grounded conversational interfaces. Do not present its output as a real statement, recording, endorsement, or decision by Andrew Ng. Respect the copyright and terms attached to every source document, portrait, and voice sample.
+
+No software license is currently included in this repository. Unless a license is added, the code remains under the repository owner's copyright.
