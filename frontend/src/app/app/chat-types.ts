@@ -56,6 +56,8 @@ export interface ChatSession {
   messages: Message[]
   triplets: TripletRow[]
   edges: EdgeRow[]
+  /** False until the first completed turn creates the server-side session. */
+  persisted: boolean
 }
 
 export type VoiceState = "inactive" | "listening" | "thinking" | "speaking"

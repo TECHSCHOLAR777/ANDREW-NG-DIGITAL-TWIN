@@ -51,6 +51,7 @@ from ..services import persona as persona_mod
 from ..services import streaming
 from ..services import rate_limit
 from ..services import curriculum as curr
+from ..services.tenant_cleanup import clear_tenant_data
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
@@ -929,7 +930,7 @@ _TTS_STATUS_TTL = 30.0
 
 
 @router.get("/tts/status")
-async def tts_status() -> dict:
+async def tts_status(refresh: bool = False) -> dict:
     """
     Whether the cloned-voice service is reachable right now.
 
@@ -940,7 +941,10 @@ async def tts_status() -> dict:
     import time as _time
 
     now = _time.monotonic()
-    if now - float(_tts_status_cache["checked_at"]) < _TTS_STATUS_TTL:
+    if (
+        not refresh
+        and now - float(_tts_status_cache["checked_at"]) < _TTS_STATUS_TTL
+    ):
         return {
             "available": bool(_tts_status_cache["available"]),
             "cached": True,
@@ -1508,8 +1512,8 @@ async def clear_tenant_memory(
     tenant_id: str          = Depends(get_tenant_id),
 ) -> dict[str, str]:
     """
-    Delete this tenant's learning memory: conversation turns, relation edges,
-    entity aliases and entity nodes.
+    Delete this tenant's learning memory: conversations, session rows, relation
+    edges, entity aliases and entity nodes.
 
     Deliberately does NOT delete the tenant row itself, and never touches
     knowledge_chunks. The old implementation deleted the tenant row and let
@@ -1524,11 +1528,7 @@ async def clear_tenant_memory(
     ten_uuid = uuid.UUID(tenant_id)
     async with db.acquire() as conn:
         async with conn.transaction():
-            # Order matters for FK integrity: edges reference nodes.
-            await conn.execute("DELETE FROM relation_edges     WHERE tenant_id = $1", ten_uuid)
-            await conn.execute("DELETE FROM entity_aliases     WHERE tenant_id = $1", ten_uuid)
-            await conn.execute("DELETE FROM entity_nodes       WHERE tenant_id = $1", ten_uuid)
-            await conn.execute("DELETE FROM conversation_turns WHERE tenant_id = $1", ten_uuid)
+            await clear_tenant_data(conn, ten_uuid)
     logger.info("Cleared learning memory for tenant %s", tenant_id)
     return {"status": "ok", "message": "Tenant learning memory cleared successfully."}
 

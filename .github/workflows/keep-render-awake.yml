@@ -1,0 +1,32 @@
+name: keep Render backend awake
+
+on:
+  schedule:
+    # Offset from the top of the hour, when scheduled Actions traffic is busiest.
+    - cron: "3/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: keep-render-backend-awake
+  cancel-in-progress: true
+
+jobs:
+  health-ping:
+    name: ping backend health
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Verify Render health endpoint
+        run: |
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            --max-time 45 \
+            --retry 2 \
+            --retry-delay 5 \
+            --retry-all-errors \
+            https://digital-twin-gzgi.onrender.com/health

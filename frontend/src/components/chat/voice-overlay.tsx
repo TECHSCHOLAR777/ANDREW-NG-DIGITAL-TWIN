@@ -29,12 +29,14 @@ export function VoiceOverlay({
   voiceState,
   latencyPhase,
   voiceProvider,
+  inputIssue,
   amplitude,
   ttsSpeed,
   transcript,
   closeRef,
   onExit,
   onInterrupt,
+  onRetryListening,
   onMute,
   onSpeedDown,
   onSpeedUp,
@@ -42,12 +44,14 @@ export function VoiceOverlay({
   voiceState: Exclude<VoiceState, "inactive">
   latencyPhase: VoiceLatencyPhase
   voiceProvider: VoiceProvider
+  inputIssue: string | null
   amplitude: number
   ttsSpeed: number
   transcript: string
   closeRef: React.RefObject<HTMLButtonElement | null>
   onExit: () => void
   onInterrupt: () => void
+  onRetryListening: () => void
   onMute: () => void
   onSpeedDown: () => void
   onSpeedUp: () => void
@@ -91,7 +95,7 @@ export function VoiceOverlay({
       ? "Checking cloned voice"
       : voiceProvider === "clone"
         ? "Andrew's cloned voice"
-        : "Browser voice fallback"
+        : "Natural browser voice"
 
   return (
     <div
@@ -165,6 +169,14 @@ export function VoiceOverlay({
             : ""}
         </p>
         <p className="mt-1 text-[11px] text-[var(--text-subtle)]">{provider}</p>
+        {inputIssue && voiceState === "listening" && (
+          <p
+            role="status"
+            className="mt-2 max-w-md text-center text-[12px] text-[var(--warn)]"
+          >
+            {inputIssue}
+          </p>
+        )}
 
         {/* Live transcript */}
         {transcript && (
@@ -192,10 +204,18 @@ export function VoiceOverlay({
         </button>
 
         <button
-          onClick={onInterrupt}
+          onClick={
+            voiceState === "listening" && inputIssue
+              ? onRetryListening
+              : onInterrupt
+          }
           className="rounded-full bg-[var(--brand)] px-6 py-3 text-[14px] font-medium text-[var(--brand-text)] hover:opacity-90 transition"
         >
-          {voiceState === "listening" ? "Stop listening" : "Tap to interrupt"}
+          {voiceState === "listening"
+            ? inputIssue
+              ? "Try microphone again"
+              : "Stop listening"
+            : "Tap to interrupt"}
         </button>
 
         <div className="flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-2">

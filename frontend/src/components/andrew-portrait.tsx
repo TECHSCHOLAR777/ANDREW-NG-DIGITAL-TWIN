@@ -320,7 +320,15 @@ export function AndrewPortrait({
           const prog = (t * speed + s / count) % 1
           const idx = Math.floor(prog * points.length)
           const p = points[idx]
-          if (!p || p.r === 0 || p.lum < 0.35 || p.by < 0.5) continue
+          if (
+            !p ||
+            p.r === 0 ||
+            p.lum < 0.35 ||
+            p.by < 0.5 ||
+            (mode === "voice" && p.mouth)
+          ) {
+            continue
+          }
           ctx!.beginPath()
           ctx!.arc(posX(p, 1, t), posY(p, 1, t), 1.5, 0, Math.PI * 2)
           ctx!.fillStyle = `rgba(${brand},0.85)`
@@ -329,9 +337,6 @@ export function AndrewPortrait({
       }
 
       // ── Dots: warm-white, tone by luminance, floor keeps dark features ──
-      const dotBrand = mode === "voice" && ampRef.current > 0.04
-        ? brandRGB()
-        : ""
       for (const p of points) {
         if (p.r === 0) continue
         const local = animate
@@ -349,9 +354,11 @@ export function AndrewPortrait({
           : p.r
         ctx!.beginPath()
         ctx!.arc(x, y, radius, 0, Math.PI * 2)
-        ctx!.fillStyle = speakingMouth
-          ? `rgba(${dotBrand},${Math.min(1, a + ampRef.current * 0.3)})`
-          : `rgba(236,234,230,${a})`
+        // The mouth stays part of the original monochrome dot portrait. Audio
+        // changes its position, radius, and opacity, never its skin-tone color.
+        ctx!.fillStyle = `rgba(236,234,230,${
+          speakingMouth ? Math.min(1, a + ampRef.current * 0.18) : a
+        })`
         ctx!.fill()
       }
     }

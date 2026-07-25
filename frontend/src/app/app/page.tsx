@@ -76,8 +76,12 @@ export default function ChatPage() {
   // Ref handles for speech engines
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const voiceStateRef = useRef<string>("inactive");
+  const recognitionRestartTimerRef = useRef<number | null>(null);
+  const recognitionRetryCountRef = useRef(0);
+  const recognitionPermissionBlockedRef = useRef(false);
   const chatAbortRef = useRef<AbortController | null>(null);
   const chatAbortReasonRef = useRef<"interrupt" | "timeout" | null>(null);
+  const sessionsRestoreGenerationRef = useRef(0);
 
   // Always-fresh handle to submitDialogueMessage for browser speech callbacks.
   // The recognition handlers are registered once on mount; without this ref
@@ -95,6 +99,69 @@ export default function ChatPage() {
     useState<VoiceLatencyPhase>("idle");
   const [voiceProvider, setVoiceProvider] =
     useState<VoiceProvider>("preparing");
+  const voiceProviderRef = useRef<VoiceProvider>("preparing");
+  const ttsStatusGenerationRef = useRef(0);
+  const browserVoiceRef = useRef<SpeechSynthesisVoice | null>(null);
+  const [voiceInputIssue, setVoiceInputIssue] = useState<string | null>(null);
+
+  const updateVoiceProvider = (provider: VoiceProvider) => {
+    voiceProviderRef.current = provider;
+    setVoiceProvider(provider);
+  };
+
+  const refreshVoiceProvider = async (force = false) => {
+    const generation = ++ttsStatusGenerationRef.current;
+    if (force) updateVoiceProvider("preparing");
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/v1/chat/tts/status${force ? "?refresh=true" : ""}`
+      );
+      const status = response.ok ? await response.json() : null;
+      if (generation !== ttsStatusGenerationRef.current) return;
+      updateVoiceProvider(status?.available ? "clone" : "browser");
+    } catch {
+      if (generation === ttsStatusGenerationRef.current) {
+        updateVoiceProvider("browser");
+      }
+    }
+  };
+
+  const clearRecognitionRestart = () => {
+    if (recognitionRestartTimerRef.current !== null) {
+      window.clearTimeout(recognitionRestartTimerRef.current);
+      recognitionRestartTimerRef.current = null;
+    }
+  };
+
+  const scheduleRecognitionStart = (delayMs = 0) => {
+    clearRecognitionRestart();
+    if (
+      voiceStateRef.current !== "listening" ||
+      recognitionPermissionBlockedRef.current
+    ) {
+      return;
+    }
+    recognitionRestartTimerRef.current = window.setTimeout(() => {
+      recognitionRestartTimerRef.current = null;
+      if (
+        voiceStateRef.current !== "listening" ||
+        recognitionPermissionBlockedRef.current
+      ) {
+        return;
+      }
+      try {
+        recognitionRef.current?.start();
+        setIsRecording(true);
+      } catch {
+        recognitionRetryCountRef.current += 1;
+        const retryDelay = Math.min(
+          4_000,
+          350 * 2 ** Math.min(recognitionRetryCountRef.current, 3)
+        );
+        scheduleRecognitionStart(retryDelay);
+      }
+    }, delayMs);
+  };
 
   // Keep state sync ref for async timers/callbacks
   useEffect(() => {
@@ -159,10 +226,7 @@ export default function ChatPage() {
 
     // Ask whether the cloned voice is reachable, so the UI can say which
     // voice the user is about to hear instead of leaving them guessing.
-    fetch(`${API_BASE_URL}/api/v1/chat/tts/status`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => setVoiceProvider(d?.available ? "clone" : "browser"))
-      .catch(() => setVoiceProvider("browser"));
+    void refreshVoiceProvider();
 
     // Restore conversations from the server. Every turn has always been
     // written to Postgres; nothing ever read them back, so a refresh destroyed
@@ -185,6 +249,9 @@ export default function ChatPage() {
 
         rec.onresult = (event: SpeechRecognitionResultEventLike) => {
           const transcript = event.results[0][0].transcript;
+          recognitionRetryCountRef.current = 0;
+          recognitionPermissionBlockedRef.current = false;
+          setVoiceInputIssue(null);
           const isVoiceActive = voiceStateRef.current !== "inactive";
           if (isVoiceActive) {
             // Call through the ref so we always hit the latest closure
@@ -196,12 +263,13 @@ export default function ChatPage() {
         };
 
         rec.onend = () => {
-          if (voiceStateRef.current === "listening") {
-            try {
-              rec.start();
-            } catch {
-              // Ignore
-            }
+          setIsRecording(false);
+          if (
+            voiceStateRef.current === "listening" &&
+            !recognitionPermissionBlockedRef.current &&
+            recognitionRestartTimerRef.current === null
+          ) {
+            scheduleRecognitionStart(250);
           } else if (voiceStateRef.current === "inactive") {
             setIsRecording(false);
           }
@@ -209,23 +277,103 @@ export default function ChatPage() {
 
         rec.onerror = (event: SpeechRecognitionErrorEventLike) => {
           console.error("Speech recognition error:", event);
-          if (voiceStateRef.current === "listening" && event.error === "no-speech") {
-            try {
-              rec.start();
-            } catch {
-              // Ignore
-            }
-          } else {
-            setVoiceState("inactive");
-            setIsRecording(false);
+          setIsRecording(false);
+          if (voiceStateRef.current !== "listening") {
+            return;
           }
+
+          if (
+            event.error === "not-allowed" ||
+            event.error === "service-not-allowed"
+          ) {
+            recognitionPermissionBlockedRef.current = true;
+            clearRecognitionRestart();
+            setVoiceInputIssue(
+              "Microphone access is blocked. Allow it in the browser, then try again."
+            );
+            return;
+          }
+
+          recognitionRetryCountRef.current += 1;
+          if (event.error === "no-speech") {
+            setVoiceInputIssue(null);
+          } else if (event.error === "audio-capture") {
+            setVoiceInputIssue(
+              "The microphone was interrupted by another capture. Reconnecting..."
+            );
+          } else {
+            setVoiceInputIssue("Voice input paused briefly. Reconnecting...");
+          }
+          const retryDelay =
+            event.error === "no-speech"
+              ? 250
+              : Math.min(
+                  4_000,
+                  500 * 2 ** Math.min(recognitionRetryCountRef.current, 3)
+                );
+          scheduleRecognitionStart(retryDelay);
         };
 
         recognitionRef.current = rec;
       }
     }
+    return () => {
+      clearRecognitionRestart();
+      try {
+        recognitionRef.current?.stop();
+      } catch {
+        // Safe to ignore during unmount.
+      }
+      recognitionRef.current = null;
+    };
     // Speech recognition is initialized once so browser callbacks can call the latest ref-backed state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Pick one high-quality English browser voice and keep it stable for the
+  // entire visit. Without this, Chrome can change its default voice between
+  // sentence-sized utterances when its network voices finish loading.
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.speechSynthesis) return;
+    const chooseBrowserVoice = () => {
+      if (browserVoiceRef.current) return;
+      const voices = window.speechSynthesis.getVoices();
+      if (!voices.length) return;
+      const score = (voice: SpeechSynthesisVoice) => {
+        const name = voice.name.toLowerCase();
+        const language = voice.lang.toLowerCase();
+        let value = language === "en-us" ? 30 : language.startsWith("en") ? 15 : 0;
+        if (name.includes("google uk english male")) value += 120;
+        else if (name.includes("google us english")) value += 110;
+        else if (name.includes("google") && language.startsWith("en")) value += 90;
+        if (name.includes("natural")) value += 80;
+        if (
+          name.includes("guy") ||
+          name.includes("ryan") ||
+          name.includes("davis") ||
+          name.includes("christopher")
+        ) {
+          value += 20;
+        }
+        if (voice.localService) value += 5;
+        return value;
+      };
+      const englishVoices = voices.filter((voice) =>
+        voice.lang.toLowerCase().startsWith("en")
+      );
+      browserVoiceRef.current = [
+        ...(englishVoices.length ? englishVoices : voices),
+      ].sort(
+        (left, right) => score(right) - score(left)
+      )[0];
+    };
+    chooseBrowserVoice();
+    window.speechSynthesis.addEventListener("voiceschanged", chooseBrowserVoice);
+    return () =>
+      window.speechSynthesis.removeEventListener(
+        "voiceschanged",
+        chooseBrowserVoice
+      );
   }, []);
 
   // When authentication resolves to a signed-in account, switch to the tenant
@@ -248,13 +396,13 @@ export default function ChatPage() {
   useEffect(() => {
     if (!recognitionRef.current) return;
     if (voiceState === "listening") {
-      try {
-        stopSpeaking();
-        recognitionRef.current.start();
-      } catch (e) {
-        console.warn("Speech recognition starting warning:", e);
-      }
+      recognitionPermissionBlockedRef.current = false;
+      recognitionRetryCountRef.current = 0;
+      setVoiceInputIssue(null);
+      stopSpeaking();
+      scheduleRecognitionStart();
     } else {
+      clearRecognitionRestart();
       try {
         recognitionRef.current.stop();
       } catch {
@@ -311,10 +459,12 @@ export default function ChatPage() {
     messages: [GREETING],
     triplets: [],
     edges: [],
+    persisted: false,
   });
 
   // Rebuild the sidebar and the active transcript from the server.
   const restoreSessions = async (tenant: string) => {
+    const generation = ++sessionsRestoreGenerationRef.current;
     setSessionsLoading(true);
     try {
       const res = await fetch(`${API_BASE_URL}/api/v1/chat/sessions`, {
@@ -323,19 +473,29 @@ export default function ChatPage() {
       if (!res.ok) throw new Error(String(res.status));
 
       const rows: { id: string; title: string; message_count: number }[] = await res.json();
-      if (!rows.length) {
+      if (generation !== sessionsRestoreGenerationRef.current) return;
+      const uniqueRows = Array.from(
+        rows
+          .reduce((byId, row) => {
+            if (!byId.has(row.id)) byId.set(row.id, row);
+            return byId;
+          }, new Map<string, (typeof rows)[number]>())
+          .values()
+      );
+      if (!uniqueRows.length) {
         const fresh = makeEmptySession();
         setSessions([fresh]);
         setActiveSessionId(fresh.id);
         return;
       }
 
-      const restored: ChatSession[] = rows.map((r) => ({
+      const restored: ChatSession[] = uniqueRows.map((r) => ({
         id: r.id,
         title: r.title || "Conversation",
         messages: [],       // filled lazily when the session is opened
         triplets: [],
         edges: [],
+        persisted: true,
       }));
       setSessions(restored);
 
@@ -345,12 +505,15 @@ export default function ChatPage() {
       setActiveSessionId(target.id);
       await loadSessionMessages(target.id, tenant);
     } catch (e) {
+      if (generation !== sessionsRestoreGenerationRef.current) return;
       console.error("Could not restore sessions:", e);
       const fresh = makeEmptySession();
       setSessions([fresh]);
       setActiveSessionId(fresh.id);
     } finally {
-      setSessionsLoading(false);
+      if (generation === sessionsRestoreGenerationRef.current) {
+        setSessionsLoading(false);
+      }
     }
   };
 
@@ -467,23 +630,41 @@ export default function ChatPage() {
     if (!window.confirm("Are you sure you want to reset your learning history? This will clear all extracted graph concepts and dialogue history in the database.")) {
       return;
     }
+    stopSpeaking();
+    clearRecognitionRestart();
+    if (chatAbortRef.current) {
+      chatAbortReasonRef.current = "interrupt";
+      chatAbortRef.current.abort();
+    }
     try {
-      await fetch(`${API_BASE_URL}/api/v1/chat/clear`, {
+      const response = await fetch(`${API_BASE_URL}/api/v1/chat/clear`, {
         method: "POST",
         headers: { "X-Tenant-Id": tenantId }
       });
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        throw new Error(body?.detail || `Reset failed (${response.status})`);
+      }
     } catch (e) {
       console.error("Failed to clear backend memory:", e);
+      const message =
+        e instanceof Error
+          ? e.message
+          : "The learning history could not be cleared.";
+      setChatError(classifyError(null, message));
+      return;
     }
 
-    const freshTenant = crypto.randomUUID();
-    localStorage.setItem(KEY_LOCAL_STORAGE_TENANT, freshTenant);
+    // Keep the tenant identity. Rotating it here broke signed-in accounts:
+    // the auth effect switched back to the account tenant and restored the
+    // supposedly deleted sidebar. The server has now cleared this tenant.
+    sessionsRestoreGenerationRef.current += 1;
     localStorage.removeItem(KEY_LOCAL_STORAGE_ACTIVE);
-    setTenantId(freshTenant);
-
     const fresh = makeEmptySession();
     setSessions([fresh]);
     setActiveSessionId(fresh.id);
+    setGraphView("session");
+    setChatError(null);
   };
 
   // Save key to storage
@@ -495,9 +676,24 @@ export default function ChatPage() {
   // Create new chat. The session row is created server-side on the first
   // message, so nothing is persisted until there is something to persist.
   const handleNewChat = () => {
+    const untouchedDraft = sessions.find(
+      (session) =>
+        !session.persisted &&
+        session.messages.length === 1 &&
+        session.messages[0]?.role === "assistant"
+    );
+    if (untouchedDraft) {
+      setActiveSessionId(untouchedDraft.id);
+      localStorage.setItem(KEY_LOCAL_STORAGE_ACTIVE, untouchedDraft.id);
+      setMobilePanel("chat");
+      setGraphView("session");
+      stopSpeaking();
+      return;
+    }
     const newSession = makeEmptySession();
     setSessions((prev) => [newSession, ...prev]);
     setActiveSessionId(newSession.id);
+    localStorage.setItem(KEY_LOCAL_STORAGE_ACTIVE, newSession.id);
     setMobilePanel("chat");
     // Reset to session view so the KG panel starts empty for a fresh chat.
     // Global view would immediately show cross-session data which is confusing.
@@ -515,21 +711,45 @@ export default function ChatPage() {
       return;
     }
 
+    if (target?.persisted) {
+      try {
+        const response = await fetch(
+          `${API_BASE_URL}/api/v1/chat/sessions/${id}`,
+          {
+            method: "DELETE",
+            headers: { "X-Tenant-Id": tenantId },
+          }
+        );
+        if (!response.ok) {
+          const body = await response.json().catch(() => null);
+          throw new Error(body?.detail || `Delete failed (${response.status})`);
+        }
+      } catch (err) {
+        console.error("Could not delete conversation on the server:", err);
+        setChatError(
+          classifyError(
+            null,
+            err instanceof Error
+              ? err.message
+              : "The conversation could not be deleted."
+          )
+        );
+        return;
+      }
+    }
+
     const filtered = sessions.filter((s) => s.id !== id);
     const replacement = filtered.length ? filtered : [makeEmptySession()];
     setSessions(replacement);
     if (activeSessionId === id) {
-      setActiveSessionId(replacement[0].id);
-      if (filtered.length) void loadSessionMessages(replacement[0].id);
-    }
-
-    try {
-      await fetch(`${API_BASE_URL}/api/v1/chat/sessions/${id}`, {
-        method: "DELETE",
-        headers: { "X-Tenant-Id": tenantId },
-      });
-    } catch (err) {
-      console.error("Could not delete conversation on the server:", err);
+      const next = replacement[0];
+      setActiveSessionId(next.id);
+      if (next.persisted) {
+        localStorage.setItem(KEY_LOCAL_STORAGE_ACTIVE, next.id);
+        if (next.messages.length === 0) void loadSessionMessages(next.id);
+      } else {
+        localStorage.removeItem(KEY_LOCAL_STORAGE_ACTIVE);
+      }
     }
   };
   // Cancel speech helper — also aborts in-flight TTS network requests so
@@ -614,6 +834,12 @@ export default function ChatPage() {
       return;
     }
     const utterance = new SpeechSynthesisUtterance(text);
+    if (browserVoiceRef.current) {
+      utterance.voice = browserVoiceRef.current;
+      utterance.lang = browserVoiceRef.current.lang || "en-US";
+    } else {
+      utterance.lang = "en-US";
+    }
     utterance.rate = ttsSpeed;
     utterance.onstart = () => {
       trackBrowserVoiceAmplitude();
@@ -660,7 +886,10 @@ export default function ChatPage() {
     let inputClosed = false;
     let playing = false;
     let finished = false;
-    let cloneEnabled = voiceProvider !== "browser";
+    // Snapshot the resolved provider for this answer. "Preparing" deliberately
+    // means browser speech, not "try the clone and wait eight seconds"; the
+    // next answer can use the clone once a fresh health check confirms it.
+    let cloneEnabled = voiceProviderRef.current === "clone";
     const deadlineMs = interactive
       ? INTERACTIVE_TTS_DEADLINE_MS
       : READ_ALOUD_TTS_DEADLINE_MS;
@@ -674,7 +903,7 @@ export default function ChatPage() {
     };
 
     const markPlaybackStarted = (provider: "clone" | "browser") => {
-      setVoiceProvider(provider);
+      updateVoiceProvider(provider);
       if (interactive && voiceStateRef.current !== "inactive") {
         setVoiceLatencyPhase(provider === "clone" ? "playing" : "fallback");
         setVoiceState("speaking");
@@ -718,12 +947,12 @@ export default function ChatPage() {
         });
         if (!res.ok) {
           cloneEnabled = false;
-          setVoiceProvider("browser");
+          updateVoiceProvider("browser");
           return null;
         }
         const blob = await res.blob();
         const envelope = await readWavAmplitude(blob);
-        setVoiceProvider("clone");
+        updateVoiceProvider("clone");
         return {
           url: URL.createObjectURL(blob),
           envelope,
@@ -731,7 +960,7 @@ export default function ChatPage() {
       } catch {
         if (!controller.signal.aborted) {
           cloneEnabled = false;
-          setVoiceProvider("browser");
+          updateVoiceProvider("browser");
         }
         return null;
       } finally {
@@ -817,7 +1046,7 @@ export default function ChatPage() {
         });
 
         if (!played && !controller.signal.aborted) {
-          setVoiceProvider("browser");
+          updateVoiceProvider("browser");
           await new Promise<void>((resolve) =>
             speakWithBrowser(
               job.text,
@@ -970,7 +1199,10 @@ export default function ChatPage() {
             s.id === activeSession.id ? { ...s, messages: activeSession.messages } : s
           )
         );
-        if (isVoiceActive) setVoiceState("inactive");
+        if (isVoiceActive) {
+          stopSpeaking();
+          setVoiceState("inactive");
+        }
         setIsLoading(false);
         return;
       }
@@ -1099,6 +1331,7 @@ export default function ChatPage() {
           s.id === activeSession.id
             ? {
                 ...s,
+                persisted: true,
                 messages: [
                   ...updatedMessages,
                   {
@@ -1332,13 +1565,7 @@ export default function ChatPage() {
           onSubmit={handleSendMessage}
           onToggleRecording={handleToggleRecording}
           onStartVoice={() => {
-            setVoiceProvider("preparing");
-            fetch(`${API_BASE_URL}/api/v1/chat/tts/status`)
-              .then((response) => (response.ok ? response.json() : null))
-              .then((status) =>
-                setVoiceProvider(status?.available ? "clone" : "browser")
-              )
-              .catch(() => setVoiceProvider("browser"));
+            void refreshVoiceProvider(true);
             setVoiceState("listening");
           }}
           onOpenSettings={() => { setSettingsOpen(true); setMobilePanel("sessions"); }}
@@ -1372,6 +1599,7 @@ export default function ChatPage() {
           voiceState={voiceState}
           latencyPhase={voiceLatencyPhase}
           voiceProvider={voiceProvider}
+          inputIssue={voiceInputIssue}
           amplitude={voiceAmplitude}
           ttsSpeed={ttsSpeed}
           transcript={lastMsg?.role === "assistant" ? lastMsg.content : ""}
@@ -1391,6 +1619,17 @@ export default function ChatPage() {
               stopSpeaking();
               setVoiceState("listening");
             }
+          }}
+          onRetryListening={() => {
+            recognitionPermissionBlockedRef.current = false;
+            recognitionRetryCountRef.current = 0;
+            setVoiceInputIssue(null);
+            try {
+              recognitionRef.current?.stop();
+            } catch {
+              // Safe to ignore before a clean restart.
+            }
+            scheduleRecognitionStart(150);
           }}
           onMute={() => {
             stopSpeaking();

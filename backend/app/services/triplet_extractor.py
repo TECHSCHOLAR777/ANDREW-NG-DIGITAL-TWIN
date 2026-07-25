@@ -526,6 +526,31 @@ class TripletExtractor:
 
         async with self.db.acquire() as conn:
             async with conn.transaction():
+                # Lock the source turn before writing anything. A user can
+                # clear history while Gemini extraction is still running in
+                # the background; without this guard that stale task could
+                # recreate graph nodes and edges after the reset completed.
+                # The row lock also serializes correctly with DELETE: either
+                # reset waits and removes these writes, or reset wins and this
+                # task observes that the source turn no longer exists.
+                live_turn_id = await conn.fetchval(
+                    """
+                    SELECT id
+                    FROM conversation_turns
+                    WHERE id = $1 AND tenant_id = $2 AND session_id = $3
+                    FOR UPDATE
+                    """,
+                    turn_id,
+                    tenant_id,
+                    session_id,
+                )
+                if live_turn_id is None:
+                    logger.info(
+                        "Skipping graph write for deleted turn %s",
+                        turn_id,
+                    )
+                    return []
+
                 for t in triplets:
                     # ── INVALIDATE: retire a belief that no longer holds ────
                     # Resolves names to existing nodes rather than creating
