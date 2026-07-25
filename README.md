@@ -2,7 +2,7 @@
 
 <h1>Andrew Ng Digital Twin</h1>
 
-<h3>An unofficial, source-grounded conversational recreation of Andrew Ng's public teaching and writing</h3>
+<h3>An unofficial, source-grounded conversational recreation of Andrew Ng's public work, reasoning, and communication</h3>
 
 <p>It combines hybrid retrieval, persistent contextual memory, an inspectable knowledge graph, and optional synthetic speech in one web application.</p>
 
@@ -49,9 +49,9 @@ This project is not affiliated with, endorsed by, or reviewed by Andrew Ng, Stan
 
 ## What this project is
 
-Andrew Ng Digital Twin is a full-stack conversational system built around Andrew Ng's publicly available educational material. The current corpus contains 529 cleaned source documents and about 1.7 million words from lectures, course notes, books, newsletters, interviews, and public writing.
+Andrew Ng Digital Twin is a full-stack conversational system built around Andrew Ng's publicly available work across machine learning research, engineering, AI products and strategy, careers, and education. The current corpus contains 529 cleaned source documents and about 1.7 million words from lectures, course notes, books, newsletters, interviews, and public writing.
 
-The application retrieves relevant passages before answering, adjusts the depth and framing to the person asking, and carries useful context across sessions. It can answer in streamed text, expose the passages and memory graph behind a response, or run as a hands-free voice conversation.
+The application retrieves relevant passages before answering, adjusts the depth and framing to the person asking, and carries useful context across sessions. It can discuss research, engineering decisions, product strategy, industry trends, careers, opinions, and technical concepts. Responses stream as text, expose their source passages and contextual memory graph, and can continue as a hands-free voice conversation.
 
 This is an engineering and research project, not a claim to reproduce a real person. The system identifies itself as an unofficial recreation, keeps the synthetic-voice disclosure visible, and should not be used to attribute new statements to Andrew Ng.
 
@@ -60,7 +60,8 @@ This is an engineering and research project, not a claim to reproduce a real per
 | Capability | What it does |
 |---|---|
 | Grounded conversation | Searches Andrew Ng's public corpus with semantic and keyword retrieval before generating a response. |
-| Adaptive explanations | Changes notation, depth, pacing, and examples for researchers, engineers, founders, product leaders, and learners. |
+| Broad domain conversation | Covers ML research, engineering, AI products and strategy, careers, industry questions, opinions, and learning. |
+| Adaptive communication | Changes notation, depth, pacing, framing, and examples for researchers, engineers, founders, product leaders, learners, and the general public. |
 | Contextual memory | Extracts useful facts and relationships from conversations into a tenant-scoped, time-aware graph. |
 | Persistent sessions | Stores chat sessions and restores them after sign-in. Account passwords are stored as bcrypt hashes and Auth.js uses JWT sessions. |
 | Inspectable evidence | Shows retrieved passages, grounding state, and a session or global view of the memory graph. |
@@ -114,7 +115,7 @@ sequenceDiagram
     participant Voice as TTS service
 
     UI->>API: POST /api/v1/chat/stream
-    API->>DB: Load session, learner state, and graph context
+    API->>DB: Load session, user context, and graph memory
     API->>DB: Hybrid vector and full-text retrieval
     DB-->>API: Ranked passages and relevant memory
     API->>LLM: Persona, evidence, memory, and user question

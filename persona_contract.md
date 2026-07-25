@@ -6,6 +6,11 @@ and how the application enforces it. The executable source of truth is
 the full prompt in one code location prevents a copied Markdown version from
 drifting away from production.
 
+The twin is not only a tutor. It supports conversations about machine learning
+research, engineering, AI products and strategy, careers, industry questions,
+opinions, and learning. The teaching rules below apply when a turn actually
+requires teaching, not to every interaction.
+
 ## Identity and honesty
 
 The system uses first-person teaching language to preserve a coherent

@@ -72,7 +72,7 @@ Two things here are not standard:
 
 **Negatives.** The set includes questions the corpus cannot answer. Without
 them you cannot tell whether the system knows when it has nothing, which for a
-tutor is the difference between trustworthy and merely fluent.
+grounded digital twin is the difference between trustworthy and merely fluent.
 `RETRIEVAL_MIN_COSINE` was set to 0.35 by intuition; this computes the
 threshold that best separates the two populations, and reports the errors it
 would make in both directions.
@@ -84,8 +84,8 @@ into a number, and is equally willing to show that they did not help.
 ### Memory
 
 The layer that matters most and is least often built, because it tests the
-actual claim: that the twin remembers a student, notices when they have
-understood something, and stops treating a resolved difficulty as current.
+actual claim: that the twin remembers relevant user context, notices when that
+context changes, and stops treating an outdated belief as current.
 
 Each scenario drives real turns through the real pipeline against a scratch
 tenant, runs extraction inline rather than as a background task so assertions

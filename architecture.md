@@ -44,7 +44,7 @@ sequenceDiagram
 
     UI->>API: Message, tenant ID, session ID, Gemini key
     API-->>UI: status: accepted
-    API->>DB: Ensure tenant and load learner state
+    API->>DB: Ensure tenant and load user context
     API->>EMB: Embed the query
     API->>DB: Hybrid corpus retrieval and graph traversal
     DB-->>API: Passages, confidence, and memory context
@@ -85,20 +85,20 @@ later, remain visible only to their owner.
 
 ## Contextual memory
 
-The memory graph records learner-specific context, not the source corpus.
-Typical relations include concepts a learner has discussed, mastered, or
-struggled with.
+The memory graph records user-specific context, not the source corpus. It can
+represent roles, organisations, projects, goals, preferences, people, and
+concepts, including topics someone has discussed, mastered, or struggled with.
 
 Before generation, `vector_anchored_subgraph` selects relevant entity nodes and
 traverses nearby active relations. The resulting summary is added to the
-prompt together with an explicit learner profile.
+prompt together with an explicit audience profile.
 
 After generation, the triplet extractor:
 
 1. extracts candidate subject, predicate, and object relationships;
 2. rejects instruction-shaped or unsupported evidence;
 3. resolves aliases before creating a new entity;
-4. invalidates contradictory live relations when the learner's state changes;
+4. invalidates contradictory live relations when the user's context changes;
 5. records observation counts and temporal validity;
 6. marks each conversation turn as processed, skipped, or failed.
 
@@ -133,13 +133,13 @@ The generation pipeline combines:
 - the maintained persona instruction;
 - the current turn type;
 - retrieved evidence and grounding strength;
-- graph-derived learner context;
+- graph-derived user and audience context;
 - account context;
 - recent conversation history.
 
-Turn routing distinguishes greetings, follow-ups, opinions, and concept
-explanations so short interactions do not pay the latency or token cost of a
-full teaching response.
+Turn routing distinguishes greetings, follow-ups, opinions, strategy, career
+questions, and concept explanations so each interaction receives an
+appropriate response shape and latency budget.
 
 The persona source of truth is
 `backend/app/services/persona.py`. Mechanical rules such as banned openers,
@@ -171,7 +171,7 @@ erDiagram
 | `chat_sessions` | Session titles and activity timestamps |
 | `conversation_turns` | Persisted user and assistant messages plus extraction state |
 | `knowledge_chunks` | Shared or private corpus passages, embeddings, and search metadata |
-| `entity_nodes` | Canonical learner-memory entities |
+| `entity_nodes` | Canonical user-context and memory entities |
 | `entity_aliases` | Alternate names mapped to canonical entities |
 | `relation_edges` | Weighted, temporal relationships with supporting evidence |
 | `curriculum_concepts` | Shared learning concepts |

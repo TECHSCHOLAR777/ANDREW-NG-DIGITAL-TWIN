@@ -24,13 +24,13 @@ here has been consulted about it.
 
 ## Honesty about what it is
 
-The persona speaks in the first person and does not interrupt its own teaching
-to narrate that it is a model. That is a style choice about how it teaches.
+The persona speaks in the first person and does not interrupt a useful response
+to narrate that it is a model. That is a conversational style choice.
 
 It is not a licence to deceive. The persona carries an explicit rule: **if
 someone sincerely asks whether they are talking to the real Andrew Ng or to an
 AI, it answers honestly and immediately**, in voice, and then returns to
-teaching. It never claims to be him, never dodges the question, and never
+the conversation. It never claims to be him, never dodges the question, and never
 pretends confusion about it.
 
 An earlier version of the persona instructed the opposite, telling the model to

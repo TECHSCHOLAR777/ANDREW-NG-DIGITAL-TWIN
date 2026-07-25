@@ -1,100 +1,126 @@
 # Privacy and Data Handling
 
-Written plainly, because a product that asks people to expose what they do not
-understand owes them a straight answer about where that goes.
+This document describes the application as implemented. A system that stores
+conversations and contextual memory owes people a clear account of where that
+information goes.
 
 ## What this is
 
-An unofficial, academic AI recreation of Andrew Ng. You can converse with it
-about research, engineering, AI products and strategy, careers, or learning —
-it is a general digital twin, not only a tutor. It is not affiliated with,
-endorsed by, or reviewed by Andrew Ng, Stanford, or DeepLearning.AI. It is not
-him, and if you ask it directly it will tell you so.
+Andrew Ng Digital Twin is an unofficial conversational recreation based on
+public work. It supports conversations about machine learning research,
+engineering, AI products and strategy, careers, industry questions, opinions,
+and learning. Tutoring is one behaviour, not the complete product.
 
-## What gets stored
+It is not affiliated with, endorsed by, or reviewed by Andrew Ng, Stanford
+University, or DeepLearning.AI.
 
-When you use the twin, the following is written to a PostgreSQL database:
+## What is stored
 
-| Data | Why | Where |
+| Data | Purpose | Location |
 |---|---|---|
-| Your messages and the twin's replies | So conversations survive a refresh and can be reopened | `conversation_turns` |
-| Context you share — concepts you mention, your role, organisation, projects, goals, and stated preferences, and what you are learning or working on | This is the memory feature: it is how the twin carries context across sessions | `entity_nodes`, `relation_edges` |
-| Short quotes from your messages | Evidence for why something was recorded, so you can see and correct it | `relation_edges.evidence` |
-| A conversation title, taken from your first message | The sidebar | `chat_sessions` |
-| A random identifier for your browser | Ties your conversations together without an account | browser localStorage |
+| User messages and generated replies | Restore conversation history | `conversation_turns` |
+| Conversation titles and timestamps | Display and order the session list | `chat_sessions` |
+| Roles, organisations, projects, goals, preferences, people, concepts, and other context extracted from conversations | Carry relevant context across sessions | `entity_nodes`, `entity_aliases`, `relation_edges` |
+| Short evidence excerpts from messages | Explain why a relationship was recorded and support correction | `relation_edges.evidence` |
+| A random guest identifier | Associate guest sessions in one browser | Browser local storage |
+| Email address, display name, tenant ownership, and a bcrypt password hash after signup | Authentication and cross-device continuity | `app_users` |
 
-There is no account, no email address, and no password. The identifier in your
-browser is the only thing linking one session to another. The twin does not
-intentionally record passwords, API keys, payment or government identifiers,
-private addresses, or sensitive personal attributes; if it ever captures
-something it should not have, you can delete it (see below).
+A guest is identified by a browser UUID. A signed-in account owns one tenant,
+allowing conversations and contextual memory to follow the account across
+devices.
 
-## What is NOT stored
+## What is not stored
 
-- **Your API key.** It is held in `sessionStorage`, which the browser clears
-  when you close the tab. It is sent with each request **to this application's
-  backend**, which uses it to call Google and then discards it. It is **not**
-  stored — never written to the database or to a log — but it is transmitted
-  through the backend, so this is not an "it never leaves your browser" claim.
-- **Audio.** Speech is transcribed by the browser and only the resulting text
-  is sent onward.
+- The Gemini API key is held in browser session storage and sent with active
+  generation requests. The application does not write it to PostgreSQL.
+- The raw account password is not stored. Signup stores a bcrypt hash.
+- Microphone recordings are not saved as conversation data.
+- Generated speech audio is not stored as part of session history.
 
-## Where your data goes
+Do not enter secrets, payment information, government identifiers, private
+addresses, health records, or other sensitive information into a conversation.
+Context extraction is model-driven and can record information incorrectly.
 
-**To Google.** Every message, along with the retrieved course material and a
-summary of what the tutor remembers about you, is sent to the Gemini API to
-generate a reply. This is not optional; it is how the tutor works.
+## Where data is processed
 
-**This matters and is easy to miss:** on Google's free API tier, content sent
-to Gemini **may be used to improve their models**. Paid tiers are covered by
-different terms. If your learning conversations are sensitive, use a paid key
-or do not use this product.
+### Application hosting and database
 
-**To Google, again, in voice mode.** The browser's speech recognition sends
-your microphone audio to Google's servers for transcription. That happens in
-the browser, before this application sees anything.
+The public deployment uses Vercel for the frontend, Render for the API, and
+Neon for PostgreSQL. These providers process requests, connection metadata, and
+stored application data according to their own terms and retention policies.
 
-**Nowhere else.** There is no analytics, no tracking, no third-party embed, and
-nothing is sold or shared.
+### Gemini
 
-## What you can do about it
+For each generated answer, the backend sends the current message, relevant
+conversation history, retrieved source passages, and a summary of contextual
+memory to Gemini using the visitor's API key.
 
-- **See what it believes about you.** The memory panel shows every concept and
-  relationship recorded, with the quote that produced it.
-- **Correct it.** Any single belief can be deleted. Extraction is a language
-  model making a guess, and some guesses are wrong.
-- **Delete one conversation.** Removes its messages and the graph edges it
-  produced.
-- **Delete everything.** "Forget everything about me" in Settings removes all
-  conversations, concepts and relationships for your browser identifier.
+How a provider retains or uses API content depends on the selected account,
+service tier, and current provider terms. Review those terms before sending
+sensitive material.
 
-Deletion is immediate and permanent. There are no backups to restore from, and
-data already sent to Google is outside this application's control.
+### Embedding provider
+
+Message text and extracted entity names are sent to the configured embedding
+provider to create vectors for retrieval and graph matching. The default
+provider is Jina, but an operator can configure Voyage, Gemini, or a local
+model.
+
+### Speech recognition
+
+In interactive voice mode, the browser's speech-recognition implementation may
+send microphone audio to its own provider for transcription. The application
+receives the resulting text.
+
+### Optional speech synthesis
+
+When an external or cloned speech service is enabled, completed response
+sentences are sent to that service and returned as audio. Browser speech
+synthesis is used when the configured service is unavailable.
+
+The project does not include application advertising trackers and does not sell
+conversation data.
+
+## User controls
+
+- Inspect the session or global contextual memory graph.
+- Remove an individual graph relationship.
+- Delete one conversation and its session-scoped relationships.
+- Use the full reset control to remove tenant-scoped sessions, turns, entities,
+  aliases, and relationships.
+
+Full reset preserves the tenant identity and, for registered users, the
+authentication account. The current application does not expose a self-service
+account-deletion route.
+
+Deletion removes application records from the active database. It cannot recall
+content already processed by an external model, embedding, recognition, or
+speech provider. Provider-side retention is governed by that provider.
 
 ## Children
 
-This is built for a general audience and has no age verification. If you are
-under 18, please do not use it without a parent or guardian who has read this
-page. The point above about free-tier content being used for model training
-applies to everyone.
+The application has no age-verification system. Anyone under 18 should use it
+only with a parent or guardian who has reviewed this document and the relevant
+provider terms.
 
 ## Self-hosting
 
-Running your own instance means your data lives in your database and your key
-is yours. See the README. Everything above about Google still applies, because
-the tutor cannot generate a reply without calling a model.
+In a self-hosted installation, stored data lives in the operator's database.
+Requests still leave the application for whichever generation, embedding,
+speech-recognition, and speech-synthesis providers the operator configures.
 
 ## Corpus
 
-The tutor answers using material from Andrew Ng's public work: CS229 lecture
-notes, Machine Learning Yearning, The Batch newsletter, and public talks.
-Copyright remains with the original authors and publishers. Passages are shown
-as short excerpts to indicate a source, not as a substitute for reading the
-original. See [POSTURE.md](POSTURE.md).
+The twin retrieves from Andrew Ng's public lectures, course material, books,
+newsletters, interviews, and writing. Copyright remains with the original
+authors and publishers. Retrieved excerpts indicate a source and are not a
+substitute for the original work.
+
+See [`POSTURE.md`](POSTURE.md) for the project's public-use boundaries.
 
 ## Contact
 
-Open an issue on the repository.
+Open an issue in the repository for privacy questions or correction requests.
 
-*If the behaviour of the product and this page ever disagree, the page is
-wrong and should be fixed.*
+If the application's behaviour and this document disagree, treat the document
+as stale and correct it.
