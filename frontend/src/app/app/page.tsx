@@ -15,6 +15,7 @@ import {
   readWavAmplitude,
   type WavAmplitudeEnvelope,
 } from "@/lib/wavAmplitude";
+import { selectPreferredBrowserVoice } from "@/lib/browserVoice";
 import type { TripletRow } from "@/types/graph";
 import {
   KEY_LOCAL_STORAGE_GEMINI,
@@ -330,42 +331,15 @@ export default function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Pick one high-quality English browser voice and keep it stable for the
-  // entire visit. Without this, Chrome can change its default voice between
-  // sentence-sized utterances when its network voices finish loading.
+  // Prefer a known English male browser voice. Chrome loads some network
+  // voices asynchronously, so reconsider the choice whenever that list
+  // changes instead of permanently keeping the first operating-system default.
   useEffect(() => {
     if (typeof window === "undefined" || !window.speechSynthesis) return;
     const chooseBrowserVoice = () => {
-      if (browserVoiceRef.current) return;
       const voices = window.speechSynthesis.getVoices();
       if (!voices.length) return;
-      const score = (voice: SpeechSynthesisVoice) => {
-        const name = voice.name.toLowerCase();
-        const language = voice.lang.toLowerCase();
-        let value = language === "en-us" ? 30 : language.startsWith("en") ? 15 : 0;
-        if (name.includes("google uk english male")) value += 120;
-        else if (name.includes("google us english")) value += 110;
-        else if (name.includes("google") && language.startsWith("en")) value += 90;
-        if (name.includes("natural")) value += 80;
-        if (
-          name.includes("guy") ||
-          name.includes("ryan") ||
-          name.includes("davis") ||
-          name.includes("christopher")
-        ) {
-          value += 20;
-        }
-        if (voice.localService) value += 5;
-        return value;
-      };
-      const englishVoices = voices.filter((voice) =>
-        voice.lang.toLowerCase().startsWith("en")
-      );
-      browserVoiceRef.current = [
-        ...(englishVoices.length ? englishVoices : voices),
-      ].sort(
-        (left, right) => score(right) - score(left)
-      )[0];
+      browserVoiceRef.current = selectPreferredBrowserVoice(voices);
     };
     chooseBrowserVoice();
     window.speechSynthesis.addEventListener("voiceschanged", chooseBrowserVoice);
@@ -834,9 +808,13 @@ export default function ChatPage() {
       return;
     }
     const utterance = new SpeechSynthesisUtterance(text);
-    if (browserVoiceRef.current) {
-      utterance.voice = browserVoiceRef.current;
-      utterance.lang = browserVoiceRef.current.lang || "en-US";
+    const selectedVoice =
+      browserVoiceRef.current ??
+      selectPreferredBrowserVoice(window.speechSynthesis.getVoices());
+    if (selectedVoice) {
+      browserVoiceRef.current = selectedVoice;
+      utterance.voice = selectedVoice;
+      utterance.lang = selectedVoice.lang || "en-US";
     } else {
       utterance.lang = "en-US";
     }
