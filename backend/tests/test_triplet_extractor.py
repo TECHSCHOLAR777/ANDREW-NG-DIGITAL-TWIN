@@ -21,6 +21,7 @@ from app.services.triplet_extractor import (  # noqa: E402
     RawTriplet,
     VALID_PREDICATES,
     VALID_NODE_TYPES,
+    STUDENT_SUBJECT_PREDICATES,
 )
 
 
@@ -48,6 +49,14 @@ def test_general_context_predicates_are_valid():
         "prefers", "decided", "concerned_about", "discussed", "collaborates_on",
     ):
         assert p in VALID_PREDICATES, p
+
+
+def test_personal_context_predicates_are_anchored_to_student():
+    for predicate in (
+        "works_at", "leads", "researches", "building", "interested_in",
+        "prefers", "decided", "concerned_about", "discussed", "collaborates_on",
+    ):
+        assert predicate in STUDENT_SUBJECT_PREDICATES, predicate
 
 
 def test_educational_predicates_are_preserved():
@@ -81,3 +90,45 @@ def test_validate_normalizes_unknown_node_type_to_concept():
     kept = ex._validate_triplets([_raw("curious_about", obj_type="Nonsense")])
     assert len(kept) == 1
     assert kept[0].object_type == "Concept"
+
+
+def test_validate_repairs_malformed_organization_self_loop():
+    ex = _extractor()
+    triplet = _raw("works_at", subj_type="Organization", obj_type="Organization")
+    triplet.subject = "AIMS-DTU"
+    triplet.canonical_subj = "AIMS-DTU"
+    triplet.object = "AIMS-DTU"
+    triplet.canonical_obj = "AIMS-DTU"
+
+    kept = ex._validate_triplets([triplet])
+
+    assert len(kept) == 1
+    assert kept[0].subject == "I"
+    assert kept[0].canonical_subj == "Student"
+    assert kept[0].subject_type == "Student"
+    assert kept[0].canonical_obj == "AIMS-DTU"
+
+
+def test_validate_rejects_true_concept_self_loop():
+    ex = _extractor()
+    triplet = _raw("related_to", subj_type="Concept", obj_type="Concept")
+    triplet.subject = "Cybersecurity"
+    triplet.canonical_subj = "Cybersecurity"
+    triplet.object = "cybersecurity"
+    triplet.canonical_obj = "cybersecurity"
+
+    assert ex._validate_triplets([triplet]) == []
+
+
+if __name__ == "__main__":
+    failures = 0
+    for name, fn in sorted(globals().items()):
+        if name.startswith("test_") and callable(fn):
+            try:
+                fn()
+                print(f"  ok   {name}")
+            except AssertionError as exc:
+                failures += 1
+                print(f"  FAIL {name}: {exc}")
+    print(f"\n{failures} failure(s)")
+    sys.exit(1 if failures else 0)

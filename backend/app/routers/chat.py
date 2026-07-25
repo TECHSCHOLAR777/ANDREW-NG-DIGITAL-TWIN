@@ -1124,6 +1124,7 @@ async def get_session_graph(
                 FROM relation_edges
                 WHERE tenant_id = $1::uuid
                   AND invalidated_at IS NULL
+                  AND subject_id <> object_id
                   AND predicate NOT IN ('named', 'is')
                 ORDER BY weight DESC
                 LIMIT 150
@@ -1138,6 +1139,7 @@ async def get_session_graph(
                 FROM relation_edges
                 WHERE tenant_id = $1::uuid AND session_id = $2::uuid
                   AND invalidated_at IS NULL
+                  AND subject_id <> object_id
                   AND predicate NOT IN ('named', 'is')
                 ORDER BY weight DESC
                 LIMIT 150

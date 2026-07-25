@@ -95,6 +95,32 @@ VALID_NODE_TYPES: set[str] = {
     "Person", "Organization", "Industry", "Goal", "Preference", "ResearchArea",
 }
 
+# These predicates describe the user, even when Gemini copies the organization
+# or topic into the subject fields. Normalizing them in code prevents malformed
+# self-loops such as "AIMS-DTU works_at AIMS-DTU".
+STUDENT_SUBJECT_PREDICATES: set[str] = {
+    "struggles_with",
+    "mastered",
+    "curious_about",
+    "works_in",
+    "studied",
+    "applied",
+    "confused_about",
+    "wants_to_learn",
+    "named",
+    "is",
+    "works_at",
+    "leads",
+    "researches",
+    "building",
+    "interested_in",
+    "prefers",
+    "decided",
+    "concerned_about",
+    "discussed",
+    "collaborates_on",
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # DATA CLASSES
 # ─────────────────────────────────────────────────────────────────────────────
@@ -462,6 +488,18 @@ class TripletExtractor:
             if t.object_type not in VALID_NODE_TYPES:
                 logger.debug("Normalizing object_type '%s' → 'Concept'", t.object_type)
                 t.object_type = "Concept"
+            if t.predicate in STUDENT_SUBJECT_PREDICATES:
+                t.subject = "I"
+                t.canonical_subj = "Student"
+                t.subject_type = "Student"
+            if t.canonical_subj.strip().casefold() == t.canonical_obj.strip().casefold():
+                logger.warning(
+                    "Rejecting self-referencing graph operation: %s -[%s]-> %s",
+                    t.canonical_subj,
+                    t.predicate,
+                    t.canonical_obj,
+                )
+                continue
             if t.confidence < 0.5:
                 logger.debug("Skipping low-confidence triplet (%.2f)", t.confidence)
                 continue
@@ -610,6 +648,14 @@ class TripletExtractor:
 
                     if subj_id is None or obj_id is None:
                         logger.warning("Failed to resolve entities for triplet: %s", t)
+                        continue
+                    if subj_id == obj_id:
+                        logger.warning(
+                            "Skipping self-referencing resolved edge: %s -[%s]-> %s",
+                            t.canonical_subj,
+                            t.predicate,
+                            t.canonical_obj,
+                        )
                         continue
 
                     # ── Update node embeddings if missing (fast database update) ──
